@@ -245,7 +245,7 @@ def test_create_cluster_sync_candidate_goes_to_review_queue_when_gate_fails(
     assert queue[0]["confidence_breakdown"]["cluster_summary"]["passes"] is False
 
 
-def test_review_sync_result_accept_adjust_and_reject(
+def test_review_sync_result_accept_adjust_reject_and_comment(
     project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
 ) -> None:
     project, connection = project_workspace
@@ -299,6 +299,28 @@ def test_review_sync_result_accept_adjust_and_reject(
     rejected = review_sync_result(connection, project["id"], third_created["sync_result"]["id"], "rejected")
     assert rejected["sync_result"]["status"] == "rejected"
     assert rejected["review_event"]["event_type"] == "rejected"
+
+    fourth_created = create_cluster_sync_candidate(
+        connection,
+        project["id"],
+        pairs=[
+            {
+                "video_subtitle_id": pair_ids["video_3"],
+                "audio_subtitle_id": pair_ids["audio_good_3"],
+            }
+        ],
+    )
+    commented = review_sync_result(
+        connection,
+        project["id"],
+        fourth_created["sync_result"]["id"],
+        "commented",
+        note="需要确认现场环境音",
+    )
+    assert commented["sync_result"]["status"] == "needs_review"
+    assert commented["review_event"]["event_type"] == "commented"
+    assert commented["review_event"]["note"] == "需要确认现场环境音"
+    assert commented["sync_result"]["review_events"][0]["event_type"] == "commented"
 
 
 def _prepare_context_recommendation_fixture(
