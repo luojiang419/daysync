@@ -39,10 +39,27 @@ describe("appReducer", () => {
           confidence_score: 1,
         },
       ],
+      project_settings: {
+        subtitle_workspace: {
+          video_timeline_id: "timeline-1",
+          audio_timeline_id: "",
+          video_srt_path: "",
+          audio_srt_path: "",
+          query: "我们到了这里",
+          cluster_samples: [],
+        },
+        export_workspace: {
+          output_path: "D:\\projects\\demo\\exports\\sync_report.csv",
+          status_filter: "all",
+          source_filter: "all",
+          min_confidence_filter: "0",
+        },
+      },
     };
 
     const nextState = appReducer(initialState, { type: "HYDRATE_PROJECT", payload: snapshot });
     expect(nextState.currentProject?.name).toBe("测试项目");
+    expect(nextState.projectSettings?.subtitle_workspace.query).toBe("我们到了这里");
     expect(nextState.mediaFiles).toHaveLength(1);
     expect(nextState.flatTimelines[0].flat_timeline_id).toBe("timeline-1");
     expect(nextState.syncResults[0].offset_ms).toBe(574180);

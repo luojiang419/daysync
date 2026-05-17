@@ -10,6 +10,7 @@ from .database import (
     write_project_metadata,
 )
 from .projects import create_project, open_project, project_snapshot
+from .projects import default_project_settings, load_project_settings, save_project_settings
 
 __all__ = [
     "DB_FILE_NAME",
@@ -24,4 +25,7 @@ __all__ = [
     "create_project",
     "open_project",
     "project_snapshot",
+    "default_project_settings",
+    "load_project_settings",
+    "save_project_settings",
 ]

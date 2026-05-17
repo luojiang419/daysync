@@ -14,6 +14,23 @@ export type ProjectStats = {
   sync_result_count: number;
 };
 
+export type ProjectSettings = {
+  subtitle_workspace: {
+    video_timeline_id: string;
+    audio_timeline_id: string;
+    video_srt_path: string;
+    audio_srt_path: string;
+    query: string;
+    cluster_samples: OffsetClusterSample[];
+  };
+  export_workspace: {
+    output_path: string;
+    status_filter: "all" | "accepted_manual" | "accepted_auto" | "needs_review" | "rejected";
+    source_filter: "all" | "manual_anchor" | "auto_text";
+    min_confidence_filter: string;
+  };
+};
+
 export type MediaFile = {
   id: string;
   media_type: "video" | "audio";
@@ -242,4 +259,5 @@ export type ProjectSnapshot = {
   media_files: MediaFile[];
   flat_timelines: FlatTimeline[];
   sync_results: SyncResult[];
+  project_settings: ProjectSettings;
 };

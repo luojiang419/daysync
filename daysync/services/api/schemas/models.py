@@ -17,6 +17,12 @@ class ProjectOpenResponse(BaseModel):
     media_files: list[dict[str, Any]]
     flat_timelines: list[dict[str, Any]]
     sync_results: list[dict[str, Any]]
+    project_settings: dict[str, Any]
+
+
+class ProjectSettingsUpdateRequest(BaseModel):
+    subtitle_workspace: dict[str, Any] = Field(default_factory=dict)
+    export_workspace: dict[str, Any] = Field(default_factory=dict)
 
 
 class MediaImportRequest(BaseModel):

@@ -6,6 +6,7 @@ import {
   listReviewQueue,
   listSyncResults,
   reviewSyncResult,
+  saveProjectSettings,
 } from "../api/client";
 import type { ReviewQueueItem, SyncResult } from "../api/types";
 import { ReviewQueueCard } from "../components/ReviewQueueCard";
@@ -26,6 +27,7 @@ export function ExportPage() {
   >("all");
   const [sourceFilter, setSourceFilter] = useState<"all" | "manual_anchor" | "auto_text">("all");
   const [minConfidenceFilter, setMinConfidenceFilter] = useState("0");
+  const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(false);
 
   const filteredSyncResults = useMemo(() => {
     const minConfidence = Number(minConfidenceFilter || "0");
@@ -55,6 +57,50 @@ export function ExportPage() {
       setOutputPath(`${state.currentProject.root_path}\\exports\\sync_report.csv`);
     }
   }, [state.currentProject]);
+
+  useEffect(() => {
+    if (!state.currentProject || !state.projectSettings) {
+      return;
+    }
+    const workspace = state.projectSettings.export_workspace;
+    setIsRestoringWorkspace(true);
+    setOutputPath(workspace.output_path || `${state.currentProject.root_path}\\exports\\sync_report.csv`);
+    setStatusFilter(workspace.status_filter || "all");
+    setSourceFilter(workspace.source_filter || "all");
+    setMinConfidenceFilter(workspace.min_confidence_filter || "0");
+    const timeoutId = window.setTimeout(() => setIsRestoringWorkspace(false), 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [state.currentProject, state.projectSettings]);
+
+  useEffect(() => {
+    if (!state.currentProject || !state.projectSettings || isRestoringWorkspace) {
+      return;
+    }
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        await saveProjectSettings(state.currentProject!.id, {
+          subtitle_workspace: state.projectSettings?.subtitle_workspace ?? {},
+          export_workspace: {
+            output_path: outputPath,
+            status_filter: statusFilter,
+            source_filter: sourceFilter,
+            min_confidence_filter: minConfidenceFilter,
+          },
+        });
+      } catch {
+        // 项目恢复写回失败不打断当前工作流程。
+      }
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    isRestoringWorkspace,
+    minConfidenceFilter,
+    outputPath,
+    sourceFilter,
+    state.currentProject,
+    state.projectSettings,
+    statusFilter,
+  ]);
 
   useEffect(() => {
     if (!state.currentProject) {

@@ -11,6 +11,7 @@ import type {
   FlatTimeline,
   MediaFile,
   Project,
+  ProjectSettings,
   ProjectSnapshot,
   ProjectStats,
   SearchResults,
@@ -28,6 +29,7 @@ export type AppState = {
   healthState: HealthState;
   healthMessage: string;
   currentProject: Project | null;
+  projectSettings: ProjectSettings | null;
   stats: ProjectStats | null;
   mediaFiles: MediaFile[];
   flatTimelines: FlatTimeline[];
@@ -43,6 +45,7 @@ export const initialState: AppState = {
   healthState: "idle",
   healthMessage: "等待连接本地 API",
   currentProject: null,
+  projectSettings: null,
   stats: null,
   mediaFiles: [],
   flatTimelines: [],
@@ -58,6 +61,7 @@ export type AppAction =
   | { type: "SET_HEALTH"; payload: { state: HealthState; message: string } }
   | { type: "HYDRATE_PROJECT"; payload: ProjectSnapshot }
   | { type: "SET_NOTICE"; payload: Notice | null }
+  | { type: "SET_PROJECT_SETTINGS"; payload: ProjectSettings }
   | { type: "MERGE_MEDIA"; payload: MediaFile[] }
   | { type: "ADD_TIMELINE"; payload: FlatTimeline }
   | { type: "SET_SEARCH_RESULTS"; payload: SearchResults | null }
@@ -78,6 +82,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         currentProject: action.payload.project,
+        projectSettings: action.payload.project_settings,
         stats: action.payload.stats,
         mediaFiles: action.payload.media_files,
         flatTimelines: action.payload.flat_timelines.map((timeline) => ({
@@ -92,6 +97,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       };
     case "SET_NOTICE":
       return { ...state, notice: action.payload };
+    case "SET_PROJECT_SETTINGS":
+      return { ...state, projectSettings: action.payload };
     case "MERGE_MEDIA": {
       const mediaById = new Map(state.mediaFiles.map((item) => [item.id, item]));
       action.payload.forEach((item) => mediaById.set(item.id, item));

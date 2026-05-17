@@ -7,6 +7,7 @@ import {
   createManualSync,
   importSubtitles,
   recommendAutoCandidates,
+  saveProjectSettings,
   searchSubtitles,
 } from "../api/client";
 import type {
@@ -53,6 +54,7 @@ export function SubtitleSearchAndSyncPage() {
   );
   const [clusterSamples, setClusterSamples] = useState<OffsetClusterSample[]>([]);
   const [clusterAnalysis, setClusterAnalysis] = useState<OffsetClusterAnalysisResponse | null>(null);
+  const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(false);
 
   useEffect(() => {
     if (!videoTimelineId && videoTimelines[0]) {
@@ -65,6 +67,68 @@ export function SubtitleSearchAndSyncPage() {
       setAudioTimelineId(audioTimelines[0].flat_timeline_id ?? audioTimelines[0].id ?? "");
     }
   }, [audioTimelineId, audioTimelines]);
+
+  useEffect(() => {
+    if (!state.currentProject || !state.projectSettings) {
+      return;
+    }
+    const workspace = state.projectSettings.subtitle_workspace;
+    setIsRestoringWorkspace(true);
+    setVideoTimelineId(
+      workspace.video_timeline_id ||
+        videoTimelines[0]?.flat_timeline_id ||
+        videoTimelines[0]?.id ||
+        "",
+    );
+    setAudioTimelineId(
+      workspace.audio_timeline_id ||
+        audioTimelines[0]?.flat_timeline_id ||
+        audioTimelines[0]?.id ||
+        "",
+    );
+    setVideoSrtPath(workspace.video_srt_path || "");
+    setAudioSrtPath(workspace.audio_srt_path || "");
+    setQuery(workspace.query || "");
+    setClusterSamples(workspace.cluster_samples || []);
+    setClusterAnalysis(null);
+    const timeoutId = window.setTimeout(() => setIsRestoringWorkspace(false), 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [audioTimelines, state.currentProject?.id, state.projectSettings, videoTimelines]);
+
+  useEffect(() => {
+    if (!state.currentProject || !state.projectSettings || isRestoringWorkspace) {
+      return;
+    }
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        await saveProjectSettings(state.currentProject!.id, {
+          subtitle_workspace: {
+            video_timeline_id: videoTimelineId,
+            audio_timeline_id: audioTimelineId,
+            video_srt_path: videoSrtPath,
+            audio_srt_path: audioSrtPath,
+            query,
+            cluster_samples: clusterSamples,
+          },
+          export_workspace: state.projectSettings?.export_workspace ?? {},
+        });
+      } catch {
+        // 项目恢复写回失败不打断当前工作流程。
+      }
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    audioSrtPath,
+    audioTimelineId,
+    clusterSamples,
+    dispatch,
+    isRestoringWorkspace,
+    query,
+    state.currentProject,
+    state.projectSettings,
+    videoSrtPath,
+    videoTimelineId,
+  ]);
 
   async function pickSubtitlePath(kind: "video" | "audio") {
     const path = await chooseSubtitleFile();

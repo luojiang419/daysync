@@ -143,6 +143,19 @@ export async function openProject(rootPath: string): Promise<ProjectSnapshot> {
   return request<ProjectSnapshot>(`/api/projects/open?${query.toString()}`);
 }
 
+export async function saveProjectSettings(
+  projectId: string,
+  payload: {
+    subtitle_workspace?: Record<string, unknown>;
+    export_workspace?: Record<string, unknown>;
+  },
+): Promise<{ project_settings: Record<string, unknown> }> {
+  return request<{ project_settings: Record<string, unknown> }>(`/api/projects/${projectId}/settings`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function importMedia(
   projectId: string,
   payload: { paths: string[]; session_id: string | null },

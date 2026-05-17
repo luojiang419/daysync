@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -109,7 +110,93 @@ def project_snapshot(root_path: str) -> dict[str, object]:
             "media_files": list_media(connection, project["id"]),
             "flat_timelines": list_flat_timelines(connection, project["id"]),
             "sync_results": list_sync_results(connection, project["id"]),
+            "project_settings": load_project_settings(connection, project["id"]),
         }
+
+
+def load_project_settings(connection: sqlite3.Connection, project_id: str) -> dict[str, object]:
+    row = connection.execute(
+        "SELECT settings_json FROM project_settings WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    if row is None:
+        return default_project_settings()
+    try:
+        parsed = json.loads(row["settings_json"])
+    except json.JSONDecodeError:
+        return default_project_settings()
+    if not isinstance(parsed, dict):
+        return default_project_settings()
+    defaults = default_project_settings()
+    return {
+        **defaults,
+        **parsed,
+        "subtitle_workspace": {
+            **defaults["subtitle_workspace"],
+            **(parsed.get("subtitle_workspace") if isinstance(parsed.get("subtitle_workspace"), dict) else {}),
+        },
+        "export_workspace": {
+            **defaults["export_workspace"],
+            **(parsed.get("export_workspace") if isinstance(parsed.get("export_workspace"), dict) else {}),
+        },
+    }
+
+
+def save_project_settings(
+    connection: sqlite3.Connection, project_id: str, settings: dict[str, object]
+) -> dict[str, object]:
+    normalized = default_project_settings()
+    normalized["subtitle_workspace"] = {
+        **normalized["subtitle_workspace"],
+        **(
+            settings.get("subtitle_workspace")
+            if isinstance(settings.get("subtitle_workspace"), dict)
+            else {}
+        ),
+    }
+    normalized["export_workspace"] = {
+        **normalized["export_workspace"],
+        **(
+            settings.get("export_workspace")
+            if isinstance(settings.get("export_workspace"), dict)
+            else {}
+        ),
+    }
+    connection.execute(
+        """
+        INSERT INTO project_settings (project_id, settings_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(project_id) DO UPDATE SET
+          settings_json = excluded.settings_json,
+          updated_at = excluded.updated_at
+        """,
+        (
+            project_id,
+            json.dumps(normalized, ensure_ascii=False),
+            utc_now_iso(),
+        ),
+    )
+    connection.commit()
+    return normalized
+
+
+def default_project_settings() -> dict[str, object]:
+    return {
+        "subtitle_workspace": {
+            "video_timeline_id": "",
+            "audio_timeline_id": "",
+            "video_srt_path": "",
+            "audio_srt_path": "",
+            "query": "",
+            "cluster_samples": [],
+        },
+        "export_workspace": {
+            "output_path": "",
+            "status_filter": "all",
+            "source_filter": "all",
+            "min_confidence_filter": "0",
+        },
+    }
 
 
 def _upsert_project_record(connection: sqlite3.Connection, project: dict[str, object]) -> None:

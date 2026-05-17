@@ -54,6 +54,7 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
     )
     assert create_response.status_code == 200
     project_id = create_response.json()["project"]["id"]
+    assert create_response.json()["project_settings"]["subtitle_workspace"]["query"] == ""
 
     media_import = client.post(
         f"/api/projects/{project_id}/media/import",
@@ -189,3 +190,24 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
     )
     assert export_response.status_code == 200
     assert export_response.json()["row_count"] == 2
+
+    settings_response = client.put(
+        f"/api/projects/{project_id}/settings",
+        json={
+            "subtitle_workspace": {
+                "query": "继续往前走",
+                "video_srt_path": str(sample_root / "subtitles" / "video_flat.srt"),
+            },
+            "export_workspace": {
+                "status_filter": "accepted_auto",
+                "source_filter": "auto_text",
+                "min_confidence_filter": "0.8",
+            },
+        },
+    )
+    assert settings_response.status_code == 200
+
+    reopen_response = client.get("/api/projects/open", params={"root_path": str(project_root)})
+    assert reopen_response.status_code == 200
+    assert reopen_response.json()["project_settings"]["subtitle_workspace"]["query"] == "继续往前走"
+    assert reopen_response.json()["project_settings"]["export_workspace"]["status_filter"] == "accepted_auto"
