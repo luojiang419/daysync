@@ -10,6 +10,7 @@ from daysync_core.errors import DaySyncError
 from daysync_core.media import ensure_ffmpeg_runtime, ffmpeg_status_from_exception
 
 from .app_state import AppState
+from .routes.admin import router as admin_router
 from .routes.export import router as export_router
 from .routes.health import router as health_router
 from .routes.media import router as media_router
@@ -59,6 +60,7 @@ def root() -> dict[str, str]:
 
 
 app.include_router(health_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
 app.include_router(timeline_router, prefix="/api")

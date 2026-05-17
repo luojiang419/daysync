@@ -82,7 +82,7 @@ def test_import_directory_expands_supported_media(
     video_dir.mkdir()
     audio_dir.mkdir()
     video_file = video_dir / "A001_C001.mov"
-    audio_file = audio_dir / "ZOOM0001.wav"
+    audio_file = audio_dir / "ZOOM0001.mp3"
     video_file.write_text("video", encoding="utf-8")
     audio_file.write_text("audio", encoding="utf-8")
     (video_dir / "notes.txt").write_text("ignore", encoding="utf-8")
@@ -103,7 +103,7 @@ def test_import_directory_expands_supported_media(
 
     assert result["failed"] == []
     assert len(result["imported"]) == 2
-    assert {item["filename"] for item in result["imported"]} == {"A001_C001.mov", "ZOOM0001.wav"}
+    assert {item["filename"] for item in result["imported"]} == {"A001_C001.mov", "ZOOM0001.mp3"}
 
 
 def test_import_empty_directory_reports_failure(

@@ -126,7 +126,7 @@ export function MediaImportPage() {
       <article className="panel-card">
         <header className="card-header">
           <h2>导入视频与外录音频</h2>
-          <span>分别选择视频目录与外录音频目录，系统会自动递归导入 `mov / mp4 / wav / m4a`</span>
+          <span>分别选择视频目录与外录音频目录，系统会自动递归导入 `mov / mp4 / wav / m4a / mp3`</span>
         </header>
         <form className="form-stack" onSubmit={handleImport}>
           <div className={`drop-zone${dragActive ? " is-active" : ""}`}>

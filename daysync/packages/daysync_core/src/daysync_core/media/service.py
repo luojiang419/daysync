@@ -9,7 +9,7 @@ from daysync_core.utils import new_uuid, utc_now_iso
 
 from .ffprobe import probe_media
 
-SUPPORTED_MEDIA_EXTENSIONS = {".mov", ".mp4", ".wav", ".m4a"}
+SUPPORTED_MEDIA_EXTENSIONS = {".mov", ".mp4", ".wav", ".m4a", ".mp3"}
 
 
 def import_media(
