@@ -9,6 +9,8 @@ from daysync_core.utils import new_uuid, utc_now_iso
 
 from .ffprobe import probe_media
 
+SUPPORTED_MEDIA_EXTENSIONS = {".mov", ".mp4", ".wav", ".m4a"}
+
 
 def import_media(
     connection: sqlite3.Connection,
@@ -20,16 +22,10 @@ def import_media(
     imported: list[dict[str, object]] = []
     failed: list[dict[str, object]] = []
     active_probe = probe_func or probe_media
+    media_paths = _resolve_media_paths(paths, failed)
 
-    for raw_path in paths:
+    for media_path in media_paths:
         try:
-            media_path = Path(raw_path)
-            if not media_path.exists():
-                raise DaySyncError(
-                    "MEDIA_FILE_NOT_FOUND",
-                    f"Media file not found: {media_path}",
-                    {"path": str(media_path)},
-                )
             probe = active_probe(media_path)
             media_id = new_uuid()
             imported_at = utc_now_iso()
@@ -99,9 +95,17 @@ def import_media(
         except DaySyncError as exc:
             failed.append(
                 {
-                    "path": raw_path,
+                    "path": str(media_path),
                     "code": exc.code,
                     "message": exc.message,
+                }
+            )
+        except Exception as exc:
+            failed.append(
+                {
+                    "path": str(media_path),
+                    "code": "MEDIA_IMPORT_FAILED",
+                    "message": f"Failed to inspect media file: {exc}",
                 }
             )
 
@@ -121,3 +125,49 @@ def list_media(connection: sqlite3.Connection, project_id: str) -> list[dict[str
         (project_id,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _resolve_media_paths(paths: list[str], failed: list[dict[str, object]]) -> list[Path]:
+    resolved: list[Path] = []
+    seen: set[str] = set()
+
+    for raw_path in paths:
+        candidate = Path(raw_path)
+        if not candidate.exists():
+            failed.append(
+                {
+                    "path": raw_path,
+                    "code": "MEDIA_FILE_NOT_FOUND",
+                    "message": f"Media path not found: {candidate}",
+                }
+            )
+            continue
+
+        if candidate.is_dir():
+            directory_files = sorted(
+                file_path
+                for file_path in candidate.rglob("*")
+                if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_MEDIA_EXTENSIONS
+            )
+            if not directory_files:
+                failed.append(
+                    {
+                        "path": raw_path,
+                        "code": "MEDIA_FILE_NOT_FOUND",
+                        "message": f"No supported media files found in directory: {candidate}",
+                    }
+                )
+                continue
+            for file_path in directory_files:
+                key = str(file_path.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    resolved.append(file_path)
+            continue
+
+        key = str(candidate.resolve())
+        if key not in seen:
+            seen.add(key)
+            resolved.append(candidate)
+
+    return resolved

@@ -1,28 +1,28 @@
 import { type FormEvent, useMemo, useState } from "react";
 
 import { ApiError, importMedia } from "../api/client";
-import { chooseFiles } from "../api/tauri";
+import { chooseDirectory } from "../api/tauri";
 import { useAppState } from "../state/AppState";
 
 export function MediaImportPage() {
   const { state, dispatch } = useAppState();
-  const [rawPaths, setRawPaths] = useState("");
+  const [videoDirectory, setVideoDirectory] = useState("");
+  const [audioDirectory, setAudioDirectory] = useState("");
   const [busy, setBusy] = useState(false);
-  const paths = useMemo(
-    () =>
-      rawPaths
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean),
-    [rawPaths],
-  );
+  const paths = useMemo(() => [videoDirectory, audioDirectory].filter(Boolean), [audioDirectory, videoDirectory]);
 
-  async function appendFilesFromDialog() {
-    const selected = await chooseFiles();
-    if (!selected.length) {
-      return;
+  async function pickVideoDirectory() {
+    const selected = await chooseDirectory();
+    if (selected) {
+      setVideoDirectory(selected);
     }
-    setRawPaths((current) => [current, ...selected].filter(Boolean).join("\n"));
+  }
+
+  async function pickAudioDirectory() {
+    const selected = await chooseDirectory();
+    if (selected) {
+      setAudioDirectory(selected);
+    }
   }
 
   async function handleImport(event: FormEvent<HTMLFormElement>) {
@@ -46,11 +46,14 @@ export function MediaImportPage() {
         payload: {
           tone: result.failed.length ? "neutral" : "success",
           message: result.failed.length
-            ? `导入完成，成功 ${result.imported.length} 个，失败 ${result.failed.length} 个。`
+            ? `导入完成，成功 ${result.imported.length} 个，失败 ${result.failed.length} 个。请检查目录内是否包含受支持媒体文件。`
             : `已导入 ${result.imported.length} 个媒体文件。`,
         },
       });
-      setRawPaths("");
+      if (result.imported.length) {
+        setVideoDirectory("");
+        setAudioDirectory("");
+      }
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "导入媒体失败。";
       dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
@@ -64,23 +67,45 @@ export function MediaImportPage() {
       <article className="panel-card">
         <header className="card-header">
           <h2>导入视频与外录音频</h2>
-          <span>支持 `mov / mp4 / wav / m4a`，不会移动原始素材</span>
+          <span>分别选择视频目录与外录音频目录，系统会自动递归导入 `mov / mp4 / wav / m4a`</span>
         </header>
         <form className="form-stack" onSubmit={handleImport}>
           <label>
-            <span>文件路径</span>
+            <span>视频目录</span>
+            <div className="inline-field">
+              <input
+                value={videoDirectory}
+                onChange={(event) => setVideoDirectory(event.target.value)}
+                placeholder="D:\\media\\video"
+              />
+              <button type="button" className="ghost-button" onClick={pickVideoDirectory}>
+                选择视频目录
+              </button>
+            </div>
+          </label>
+          <label>
+            <span>外录音频目录</span>
+            <div className="inline-field">
+              <input
+                value={audioDirectory}
+                onChange={(event) => setAudioDirectory(event.target.value)}
+                placeholder="D:\\audio\\external"
+              />
+              <button type="button" className="ghost-button" onClick={pickAudioDirectory}>
+                选择外录音频目录
+              </button>
+            </div>
+          </label>
+          <label>
+            <span>待导入目录</span>
             <textarea
-              rows={8}
-              value={rawPaths}
-              onChange={(event) => setRawPaths(event.target.value)}
-              placeholder={"每行一个路径\nD:\\media\\A001_C001.mov\nD:\\audio\\ZOOM0001.wav"}
-              required
+              rows={5}
+              value={paths.join("\n")}
+              readOnly
+              placeholder={"选择视频目录与外录音频目录后，会显示在这里"}
             />
           </label>
           <div className="button-row">
-            <button type="button" className="ghost-button" onClick={appendFilesFromDialog}>
-              选择文件
-            </button>
             <button type="submit" className="primary-button" disabled={busy || !paths.length}>
               {busy ? "导入中..." : "开始导入"}
             </button>

@@ -71,3 +71,49 @@ def test_import_missing_file(project_workspace: tuple[dict[str, object], object]
     project, connection = project_workspace
     result = import_media(connection, project["id"], ["X:/not-found.mov"])
     assert result["failed"][0]["code"] == "MEDIA_FILE_NOT_FOUND"
+
+
+def test_import_directory_expands_supported_media(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    video_dir = tmp_path / "video"
+    audio_dir = tmp_path / "audio"
+    video_dir.mkdir()
+    audio_dir.mkdir()
+    video_file = video_dir / "A001_C001.mov"
+    audio_file = audio_dir / "ZOOM0001.wav"
+    video_file.write_text("video", encoding="utf-8")
+    audio_file.write_text("audio", encoding="utf-8")
+    (video_dir / "notes.txt").write_text("ignore", encoding="utf-8")
+    video_payload = json.loads((sample_root / "media" / "mock_video_001.json").read_text(encoding="utf-8"))
+    audio_payload = json.loads((sample_root / "media" / "mock_audio_001.json").read_text(encoding="utf-8"))
+
+    def fake_probe(path: Path) -> dict[str, object]:
+        if path.name.endswith(".mov"):
+            return parse_ffprobe_payload(path, video_payload)
+        return parse_ffprobe_payload(path, audio_payload)
+
+    result = import_media(
+        connection,
+        project["id"],
+        [str(video_dir), str(audio_dir)],
+        probe_func=fake_probe,
+    )
+
+    assert result["failed"] == []
+    assert len(result["imported"]) == 2
+    assert {item["filename"] for item in result["imported"]} == {"A001_C001.mov", "ZOOM0001.wav"}
+
+
+def test_import_empty_directory_reports_failure(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path
+) -> None:
+    project, connection = project_workspace
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+
+    result = import_media(connection, project["id"], [str(empty_dir)])
+
+    assert result["imported"] == []
+    assert result["failed"][0]["code"] == "MEDIA_FILE_NOT_FOUND"
