@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -56,4 +56,11 @@ export async function listenForDirectoryDrops(
   return getCurrentWebview().onDragDropEvent((event) => {
     handler(event.payload);
   });
+}
+
+export function toMediaAssetUrl(path: string | null | undefined): string | null {
+  if (!path || !isTauriRuntime()) {
+    return null;
+  }
+  return convertFileSrc(path);
 }

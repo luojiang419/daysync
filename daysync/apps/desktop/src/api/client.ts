@@ -8,6 +8,7 @@ import type {
   ProjectSnapshot,
   ReviewQueueItem,
   SearchResults,
+  StudioTimelineSnapshot,
   SyncResult,
 } from "./types";
 
@@ -411,4 +412,8 @@ export async function exportFcpxml(
 
 export async function listExportJobs(projectId: string): Promise<ExportJobListResponse> {
   return request<ExportJobListResponse>(`/api/projects/${projectId}/exports/jobs`);
+}
+
+export async function getStudioTimeline(projectId: string): Promise<StudioTimelineSnapshot> {
+  return request<StudioTimelineSnapshot>(`/api/projects/${projectId}/studio/timeline`);
 }

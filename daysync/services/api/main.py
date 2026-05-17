@@ -16,6 +16,7 @@ from .routes.health import router as health_router
 from .routes.media import router as media_router
 from .routes.projects import router as projects_router
 from .routes.subtitles import router as subtitles_router
+from .routes.studio import router as studio_router
 from .routes.sync import router as sync_router
 from .routes.timeline import router as timeline_router
 
@@ -65,5 +66,6 @@ app.include_router(projects_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
 app.include_router(timeline_router, prefix="/api")
 app.include_router(subtitles_router, prefix="/api")
+app.include_router(studio_router, prefix="/api")
 app.include_router(sync_router, prefix="/api")
 app.include_router(export_router, prefix="/api")

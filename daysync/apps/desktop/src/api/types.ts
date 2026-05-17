@@ -265,6 +265,98 @@ export type ExportJob = {
   completed_at?: string | null;
 };
 
+export type StudioTrackMeta = {
+  id: string;
+  kind: string;
+  name: string;
+  media_type?: "video" | "audio";
+  track_type?: "video_ref" | "external_audio";
+  source_type?: string;
+  language?: string | null;
+  original_path?: string | null;
+  gap_ms?: number;
+  sort_mode?: "filename" | "created_at" | "manual";
+  item_count?: number;
+  cue_count?: number;
+  total_duration_ms: number;
+  created_at: string;
+};
+
+export type StudioMediaClip = {
+  id: string;
+  timeline_id: string;
+  media_file_id: string;
+  item_index: number;
+  media_type: "video" | "audio";
+  filename: string;
+  original_path: string;
+  flat_start_ms: number;
+  flat_end_ms: number;
+  source_start_ms: number;
+  source_end_ms: number;
+  gap_after_ms: number;
+  has_video: boolean;
+  has_audio: boolean;
+};
+
+export type StudioSubtitleCue = {
+  subtitle_id: string;
+  track_id: string;
+  track_type: "video_ref" | "external_audio";
+  subtitle_index: number;
+  flat_start_ms: number;
+  flat_end_ms: number;
+  source_start_ms?: number | null;
+  source_end_ms?: number | null;
+  raw_text: string;
+  mapping_status: "ok" | "warning" | "failed";
+  mapping_warning?: string | null;
+  source_filename?: string | null;
+};
+
+export type StudioSyncSegment = {
+  sync_result_id: string;
+  video_media_file_id: string;
+  audio_media_file_id: string;
+  video_filename: string;
+  audio_filename: string;
+  video_original_path: string;
+  audio_original_path: string;
+  video_flat_start_ms: number;
+  video_flat_end_ms: number;
+  audio_flat_start_ms: number;
+  audio_flat_end_ms: number;
+  video_in_ms: number;
+  video_out_ms: number;
+  audio_in_ms: number;
+  audio_out_ms: number;
+  offset_ms: number;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StudioTimelineSnapshot = {
+  project_id: string;
+  video_timeline: StudioTrackMeta | null;
+  audio_timeline: StudioTrackMeta | null;
+  video_subtitle_track: StudioTrackMeta | null;
+  audio_subtitle_track: StudioTrackMeta | null;
+  video_clips: StudioMediaClip[];
+  audio_clips: StudioMediaClip[];
+  video_subtitles: StudioSubtitleCue[];
+  audio_subtitles: StudioSubtitleCue[];
+  sync_segments: StudioSyncSegment[];
+  accepted_sync_summary: {
+    status: "missing" | "ready";
+    accepted_count: number;
+    median_offset_ms?: number | null;
+    latest_source?: string | null;
+    latest_updated_at?: string | null;
+  };
+};
+
 export type ProjectSnapshot = {
   project: Project;
   stats: ProjectStats;
