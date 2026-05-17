@@ -70,7 +70,7 @@ function App() {
           type: "SET_HEALTH",
           payload: {
             state: "error",
-            message: "未连接到本地 API，请启动 uvicorn 或通过 Tauri Dev 自动拉起。",
+            message: "未连接到本地 API，请检查 DaySync 本地运行时是否完整，或在开发环境手动启动 uvicorn。",
           },
         });
       }

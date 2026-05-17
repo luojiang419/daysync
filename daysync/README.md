@@ -41,6 +41,8 @@ pnpm --filter desktop dev
 pnpm --filter desktop test
 pnpm --filter desktop tauri dev
 uv run python scripts/ensure_ffmpeg.py
+pnpm --filter desktop tauri build
+pwsh -File scripts/build_windows_release.ps1
 ```
 
 ## FFmpeg 配置
@@ -55,3 +57,25 @@ uv run python scripts/ensure_ffmpeg.py
 1. 项目内 `tools/ffmpeg/windows-x64/current/bin/`
 2. 系统 `PATH`
 3. 自动下载 Gyan Windows release essentials ZIP 到项目目录
+
+## Windows 便携发布
+
+执行下面命令会生成一个带本地 API 运行时的 Windows 便携目录：
+
+```powershell
+pwsh -File scripts/build_windows_release.ps1
+```
+
+输出目录默认在：
+
+```text
+output/DaySync_Windows_Portable/
+```
+
+目录内会包含：
+
+- `DaySync.exe`
+- `daysync_runtime/`
+- `release-manifest.json`
+
+其中 `daysync_runtime/` 会带上本地 `.venv`、`services/`、`packages/daysync_core/src/` 与项目内 FFmpeg 运行时，桌面端启动时会优先使用这个本地运行时，而不是依赖开发机的绝对路径或全局 `uv`。
