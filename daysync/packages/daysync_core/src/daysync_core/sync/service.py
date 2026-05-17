@@ -74,7 +74,7 @@ def list_sync_results(connection: sqlite3.Connection, project_id: str) -> list[d
         SELECT sr.id, sr.project_id, sr.video_media_file_id, sr.audio_media_file_id, sr.video_in_ms,
                sr.video_out_ms, sr.audio_in_ms, sr.audio_out_ms, sr.offset_ms, sr.confidence_score,
                sr.status, sr.source, sr.video_anchor_subtitle_id, sr.audio_anchor_subtitle_id,
-               sr.created_at, sr.updated_at,
+               sr.confidence_breakdown_json, sr.created_at, sr.updated_at,
                vm.filename AS video_file, am.filename AS audio_file,
                vs.raw_text AS video_anchor_text, aus.raw_text AS audio_anchor_text
         FROM sync_results sr
@@ -87,7 +87,30 @@ def list_sync_results(connection: sqlite3.Connection, project_id: str) -> list[d
         """,
         (project_id,),
     ).fetchall()
-    return [dict(row) for row in rows]
+    if not rows:
+        return []
+
+    sync_result_ids = [row["id"] for row in rows]
+    review_events = connection.execute(
+        """
+        SELECT id, sync_result_id, event_type, old_offset_ms, new_offset_ms, note, created_at
+        FROM review_events
+        WHERE sync_result_id IN ({placeholders})
+        ORDER BY created_at DESC
+        """.format(placeholders=",".join("?" for _ in sync_result_ids)),
+        sync_result_ids,
+    ).fetchall()
+    review_events_by_result: dict[str, list[dict[str, object]]] = {}
+    for event in review_events:
+        review_events_by_result.setdefault(event["sync_result_id"], []).append(dict(event))
+
+    results: list[dict[str, object]] = []
+    for row in rows:
+        item = dict(row)
+        item["confidence_breakdown"] = _parse_json(item.pop("confidence_breakdown_json"))
+        item["review_events"] = review_events_by_result.get(item["id"], [])
+        results.append(item)
+    return results
 
 
 def list_review_queue(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:

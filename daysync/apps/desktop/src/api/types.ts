@@ -222,11 +222,18 @@ export type SyncResult = {
   source: string;
   confidence_score: number;
   project_id?: string;
+  video_in_ms?: number;
+  video_out_ms?: number;
+  audio_in_ms?: number;
+  audio_out_ms?: number;
   video_file?: string;
   audio_file?: string;
   video_anchor_text?: string;
   audio_anchor_text?: string;
   created_at?: string;
+  updated_at?: string;
+  confidence_breakdown?: Record<string, unknown>;
+  review_events?: ReviewEvent[];
 };
 
 export type ProjectSnapshot = {

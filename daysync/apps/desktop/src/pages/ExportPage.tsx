@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   ApiError,
@@ -7,8 +7,9 @@ import {
   listSyncResults,
   reviewSyncResult,
 } from "../api/client";
-import type { ReviewQueueItem } from "../api/types";
+import type { ReviewQueueItem, SyncResult } from "../api/types";
 import { ReviewQueueCard } from "../components/ReviewQueueCard";
+import { SyncResultCard } from "../components/SyncResultCard";
 import { chooseDirectory } from "../api/tauri";
 import { useAppState } from "../state/AppState";
 
@@ -20,6 +21,34 @@ export function ExportPage() {
   const [reviewBusyId, setReviewBusyId] = useState<string | null>(null);
   const [adjustOffsets, setAdjustOffsets] = useState<Record<string, string>>({});
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "accepted_manual" | "accepted_auto" | "needs_review" | "rejected"
+  >("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "manual_anchor" | "auto_text">("all");
+  const [minConfidenceFilter, setMinConfidenceFilter] = useState("0");
+
+  const filteredSyncResults = useMemo(() => {
+    const minConfidence = Number(minConfidenceFilter || "0");
+    return state.syncResults.filter((item) => {
+      if (statusFilter !== "all" && item.status !== statusFilter) {
+        return false;
+      }
+      if (sourceFilter !== "all" && item.source !== sourceFilter) {
+        return false;
+      }
+      if ((item.confidence_score ?? 0) < minConfidence) {
+        return false;
+      }
+      return true;
+    });
+  }, [minConfidenceFilter, sourceFilter, state.syncResults, statusFilter]);
+
+  const acceptedManualCount = state.syncResults.filter((item) => item.status === "accepted_manual").length;
+  const acceptedAutoCount = state.syncResults.filter((item) => item.status === "accepted_auto").length;
+  const reviewHistoryCount = state.syncResults.reduce(
+    (count, item) => count + (item.review_events?.length ?? 0),
+    0,
+  );
 
   useEffect(() => {
     if (state.currentProject) {
@@ -177,6 +206,22 @@ export function ExportPage() {
           <h2>同步结果与 CSV 导出</h2>
           <span>只导出 `accepted_manual / accepted_auto` 结果</span>
         </header>
+
+        <div className="metrics-grid">
+          <div className="metric-card">
+            <span>手动接受</span>
+            <strong>{acceptedManualCount}</strong>
+          </div>
+          <div className="metric-card">
+            <span>自动接受</span>
+            <strong>{acceptedAutoCount}</strong>
+          </div>
+          <div className="metric-card">
+            <span>复核历史</span>
+            <strong>{reviewHistoryCount}</strong>
+          </div>
+        </div>
+
         <form className="form-stack" onSubmit={handleExport}>
           <label>
             <span>输出路径</span>
@@ -192,31 +237,45 @@ export function ExportPage() {
           </button>
         </form>
 
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>状态</th>
-                <th>offset_ms</th>
-                <th>视频素材</th>
-                <th>音频素材</th>
-                <th>视频锚点</th>
-                <th>音频锚点</th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.syncResults.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.status}</td>
-                  <td>{item.offset_ms}</td>
-                  <td>{item.video_file ?? "-"}</td>
-                  <td>{item.audio_file ?? "-"}</td>
-                  <td>{item.video_anchor_text ?? "-"}</td>
-                  <td>{item.audio_anchor_text ?? "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="inline-settings">
+          <label>
+            <span>状态筛选</span>
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+              <option value="all">all</option>
+              <option value="accepted_manual">accepted_manual</option>
+              <option value="accepted_auto">accepted_auto</option>
+              <option value="needs_review">needs_review</option>
+              <option value="rejected">rejected</option>
+            </select>
+          </label>
+          <label>
+            <span>来源筛选</span>
+            <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}>
+              <option value="all">all</option>
+              <option value="manual_anchor">manual_anchor</option>
+              <option value="auto_text">auto_text</option>
+            </select>
+          </label>
+          <label>
+            <span>最低置信度</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={minConfidenceFilter}
+              onChange={(event) => setMinConfidenceFilter(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="cluster-sample-list">
+          {filteredSyncResults.map((item: SyncResult) => (
+            <SyncResultCard key={item.id} item={item} />
+          ))}
+          {!filteredSyncResults.length ? (
+            <span className="status-meta">当前筛选条件下没有同步结果。</span>
+          ) : null}
         </div>
       </article>
     </section>
