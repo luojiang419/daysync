@@ -4,6 +4,7 @@ import {
   ApiError,
   exportCsv,
   exportFcp7Xml,
+  exportJson,
   listExportJobs,
   listReviewQueue,
   listSyncResults,
@@ -277,6 +278,33 @@ export function ExportPage() {
     }
   }
 
+  async function handleExportJson() {
+    if (!state.currentProject) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await refreshSyncResults();
+      const jsonPath = outputPath.toLowerCase().endsWith(".csv")
+        ? `${outputPath.slice(0, -4)}.json`
+        : `${outputPath}.json`;
+      const result = await exportJson(state.currentProject.id, jsonPath);
+      void refreshExportJobs(true);
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: "success",
+          message: `JSON 已导出到 ${result.output_path}，共 ${result.item_count} 条同步结果。`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "导出 JSON 失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="page-grid">
       <article className="panel-card span-two">
@@ -353,6 +381,14 @@ export function ExportPage() {
             onClick={handleExportFcp7Xml}
           >
             {busy ? "导出中..." : "导出 FCP 7 XML"}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!outputPath || busy}
+            onClick={handleExportJson}
+          >
+            {busy ? "导出中..." : "导出 JSON"}
           </button>
         </form>
 

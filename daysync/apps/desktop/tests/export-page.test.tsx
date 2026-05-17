@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import { ExportPage } from "../src/pages/ExportPage";
 import * as apiClient from "../src/api/client";
@@ -48,6 +49,7 @@ vi.mock("../src/api/client", async () => {
     ...actual,
     exportCsv: vi.fn(),
     exportFcp7Xml: vi.fn(),
+    exportJson: vi.fn(),
     listExportJobs: vi.fn(),
     listReviewQueue: vi.fn(),
     listSyncResults: vi.fn(),
@@ -91,6 +93,29 @@ describe("ExportPage", () => {
 
     await waitFor(() => {
       expect(apiClient.listExportJobs).toHaveBeenCalledWith("project-1");
+    });
+  });
+
+  it("点击导出 JSON 时写入默认 json 路径", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.listReviewQueue).mockResolvedValue({ items: [] });
+    vi.mocked(apiClient.listSyncResults).mockResolvedValue({ sync_results: [] });
+    vi.mocked(apiClient.listExportJobs).mockResolvedValue({ items: [] });
+    vi.mocked(apiClient.exportJson).mockResolvedValue({
+      output_path: "D:\\projects\\demo\\exports\\sync_report.json",
+      item_count: 0,
+    });
+
+    render(<ExportPage />);
+
+    await screen.findByText("导出 JSON");
+    await user.click(screen.getByRole("button", { name: "导出 JSON" }));
+
+    await waitFor(() => {
+      expect(apiClient.exportJson).toHaveBeenCalledWith(
+        "project-1",
+        "D:\\projects\\demo\\exports\\sync_report.json",
+      );
     });
   });
 });

@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from daysync_core.db import connect_database, database_path_for_project
-from daysync_core.export import export_sync_report_csv, export_sync_report_fcp7_xml, list_export_jobs
+from daysync_core.export import export_sync_report_csv, export_sync_report_fcp7_xml, export_sync_report_json, list_export_jobs
 
-from ..schemas.models import ExportCsvRequest, ExportFcp7XmlRequest
+from ..schemas.models import ExportCsvRequest, ExportFcp7XmlRequest, ExportJsonRequest
 
 router = APIRouter(prefix="/projects/{project_id}/exports", tags=["export"])
 
@@ -31,3 +31,12 @@ def export_fcp7_xml_route(
     root_path = request.app.state.runtime.resolve(project_id)
     with connect_database(database_path_for_project(root_path)) as connection:
         return export_sync_report_fcp7_xml(connection, project_id, payload.output_path)
+
+
+@router.post("/json")
+def export_json_route(
+    project_id: str, payload: ExportJsonRequest, request: Request
+) -> dict[str, object]:
+    root_path = request.app.state.runtime.resolve(project_id)
+    with connect_database(database_path_for_project(root_path)) as connection:
+        return export_sync_report_json(connection, project_id, payload.output_path)

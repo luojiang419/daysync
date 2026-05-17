@@ -101,6 +101,11 @@ type ExportFcp7XmlResponse = {
   sequence_count: number;
 };
 
+type ExportJsonResponse = {
+  output_path: string;
+  item_count: number;
+};
+
 type ExportJobListResponse = {
   items: ExportJob[];
 };
@@ -324,6 +329,16 @@ export async function exportFcp7Xml(
   outputPath: string,
 ): Promise<ExportFcp7XmlResponse> {
   return request<ExportFcp7XmlResponse>(`/api/projects/${projectId}/exports/fcp7-xml`, {
+    method: "POST",
+    body: JSON.stringify({ output_path: outputPath }),
+  });
+}
+
+export async function exportJson(
+  projectId: string,
+  outputPath: string,
+): Promise<ExportJsonResponse> {
+  return request<ExportJsonResponse>(`/api/projects/${projectId}/exports/json`, {
     method: "POST",
     body: JSON.stringify({ output_path: outputPath }),
   });

@@ -87,6 +87,10 @@ class ExportFcp7XmlRequest(BaseModel):
     output_path: str
 
 
+class ExportJsonRequest(BaseModel):
+    output_path: str
+
+
 class SearchQueryResponse(BaseModel):
     query: str
     video_results: list[dict[str, Any]]
