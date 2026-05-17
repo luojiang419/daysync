@@ -1,0 +1,1 @@
+"""DaySync services namespace."""

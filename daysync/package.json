@@ -1,0 +1,11 @@
+{
+  "name": "daysync-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev": "pnpm --filter desktop dev",
+    "build": "pnpm --filter desktop build",
+    "test": "pnpm --filter desktop test"
+  }
+}

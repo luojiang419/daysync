@@ -1,0 +1,1 @@
+"""DaySync core tests package."""

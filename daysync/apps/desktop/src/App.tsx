@@ -1,0 +1,86 @@
+import { useEffect } from "react";
+import { createHashRouter, RouterProvider } from "react-router-dom";
+
+import { checkHealth } from "./api/client";
+import { ensureDevApi } from "./api/tauri";
+import { AppShell } from "./components/AppShell";
+import { ExportPage } from "./pages/ExportPage";
+import { FlatTimelinePage } from "./pages/FlatTimelinePage";
+import { MediaImportPage } from "./pages/MediaImportPage";
+import { ProjectHomePage } from "./pages/ProjectHomePage";
+import { SubtitleSearchAndSyncPage } from "./pages/SubtitleSearchAndSyncPage";
+import { useAppState } from "./state/AppState";
+
+const router = createHashRouter([
+  {
+    path: "/",
+    element: <AppShell />,
+    children: [
+      { index: true, element: <ProjectHomePage /> },
+      { path: "media", element: <MediaImportPage /> },
+      { path: "timeline", element: <FlatTimelinePage /> },
+      { path: "subtitles", element: <SubtitleSearchAndSyncPage /> },
+      { path: "export", element: <ExportPage /> },
+    ],
+  },
+]);
+
+function App() {
+  const { dispatch } = useAppState();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function bootstrap() {
+      dispatch({
+        type: "SET_HEALTH",
+        payload: { state: "checking", message: "正在连接本地 API..." },
+      });
+
+      try {
+        await ensureDevApi();
+      } catch {
+        // 开发模式下没有 Tauri runtime 时忽略自动拉起。
+      }
+
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+          const health = await checkHealth();
+          if (cancelled) {
+            return;
+          }
+          dispatch({
+            type: "SET_HEALTH",
+            payload: {
+              state: "ready",
+              message: `API 已连接，本会话登记 ${health.registered_projects} 个项目`,
+            },
+          });
+          return;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 300 : 700));
+        }
+      }
+
+      if (!cancelled) {
+        dispatch({
+          type: "SET_HEALTH",
+          payload: {
+            state: "error",
+            message: "未连接到本地 API，请启动 uvicorn 或通过 Tauri Dev 自动拉起。",
+          },
+        });
+      }
+    }
+
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch]);
+
+  return <RouterProvider router={router} />;
+}
+
+export default App;

@@ -1,0 +1,1 @@
+sync_result_id,status,source,confidence_score,video_file,video_in_ms,video_out_ms,audio_file,audio_in_ms,audio_out_ms,offset_ms,video_anchor_text,audio_anchor_text,created_at

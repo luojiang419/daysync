@@ -1,0 +1,12 @@
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+coverage/
+*.pyc
+*.pyo
+*.sqlite
+*.db
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/

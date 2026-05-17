@@ -1,0 +1,3 @@
+需要将当前的项目推到github以便随时回滚，并将这个规则写入skill文档里面，每次修改前先推送备份，github推送地址在[luojiang419/daysync.git](https://github.com/luojiang419/daysync.git)
+
+ffprobe/ffmpeg自动下载和补齐到项目文件里，保证正常可用

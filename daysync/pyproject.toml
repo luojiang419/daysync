@@ -1,0 +1,35 @@
+[project]
+name = "daysync-workspace"
+version = "0.1.0"
+description = "DaySync MVP 0.1 local workspace"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "daysync-core",
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "pydantic>=2.8,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4,<9",
+]
+
+[tool.uv.sources]
+daysync-core = { path = "packages/daysync_core", editable = true }
+
+[tool.pytest.ini_options]
+pythonpath = [
+  ".",
+  "packages/daysync_core/src",
+]
+testpaths = [
+  "packages/daysync_core/tests",
+  "tests",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

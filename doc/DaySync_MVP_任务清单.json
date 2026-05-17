@@ -1,0 +1,397 @@
+{
+  "project": "DaySync",
+  "spec_version": "0.1",
+  "rules": [
+    "Implement tasks in order unless explicitly instructed otherwise.",
+    "All time values are integer milliseconds.",
+    "Public IDs are UUID strings.",
+    "Each task must include tests."
+  ],
+  "tasks": [
+    {
+      "id": "DYS-000",
+      "phase": "Phase 0",
+      "title": "初始化 monorepo",
+      "description": "Create root repo structure for desktop app, Python service, core package, docs, sample_data and scripts.",
+      "dependencies": [],
+      "outputs": [
+        "README.md",
+        "pyproject.toml",
+        "package.json",
+        "apps/desktop",
+        "services/api",
+        "packages/daysync_core"
+      ],
+      "acceptance_criteria": [
+        "Repo can install Python deps",
+        "Repo can install frontend deps",
+        "README documents local dev commands"
+      ]
+    },
+    {
+      "id": "DYS-001",
+      "phase": "Phase 0",
+      "title": "SQLite 初始化与迁移",
+      "description": "Implement database initialization using DaySync MVP schema and PRAGMA settings.",
+      "dependencies": [
+        "DYS-000"
+      ],
+      "outputs": [
+        "packages/daysync_core/db/schema.sql",
+        "packages/daysync_core/db/database.py"
+      ],
+      "acceptance_criteria": [
+        "Creates daysync.sqlite",
+        "Enables WAL",
+        "Enables foreign_keys",
+        "All tables exist"
+      ],
+      "tests": [
+        "test_db_init_creates_tables",
+        "test_db_pragmas"
+      ]
+    },
+    {
+      "id": "DYS-101",
+      "phase": "Phase 1",
+      "title": "创建项目",
+      "description": "Create project folder, daysync.project.json, and SQLite database record.",
+      "dependencies": [
+        "DYS-001"
+      ],
+      "outputs": [
+        "ProjectService.create_project",
+        "POST /api/projects"
+      ],
+      "acceptance_criteria": [
+        "Creates project metadata json",
+        "Creates projects row",
+        "Rejects unwritable root_path"
+      ],
+      "tests": [
+        "test_create_project_success",
+        "test_create_project_invalid_path"
+      ]
+    },
+    {
+      "id": "DYS-102",
+      "phase": "Phase 1",
+      "title": "打开项目",
+      "description": "Load existing project from daysync.project.json and database.",
+      "dependencies": [
+        "DYS-101"
+      ],
+      "outputs": [
+        "ProjectService.open_project",
+        "GET /api/projects/open"
+      ],
+      "acceptance_criteria": [
+        "Loads project by root_path",
+        "Fails with PROJECT_NOT_FOUND when missing"
+      ],
+      "tests": [
+        "test_open_project_success",
+        "test_open_project_missing"
+      ]
+    },
+    {
+      "id": "DYS-103",
+      "phase": "Phase 1",
+      "title": "ffprobe 媒体分析抽象",
+      "description": "Implement safe ffprobe wrapper and media metadata parser.",
+      "dependencies": [
+        "DYS-001"
+      ],
+      "outputs": [
+        "daysync_core.media.ffprobe",
+        "daysync_core.media.probe_media"
+      ],
+      "acceptance_criteria": [
+        "No shell string concatenation",
+        "Parses duration_ms",
+        "Parses streams",
+        "Returns FFMPEG_NOT_FOUND when ffprobe missing"
+      ],
+      "tests": [
+        "test_parse_ffprobe_video_json",
+        "test_parse_ffprobe_audio_json",
+        "test_ffprobe_missing"
+      ]
+    },
+    {
+      "id": "DYS-104",
+      "phase": "Phase 1",
+      "title": "导入媒体",
+      "description": "Import video/audio files into media_files and media_streams without modifying originals.",
+      "dependencies": [
+        "DYS-101",
+        "DYS-103"
+      ],
+      "outputs": [
+        "MediaService.import_media",
+        "POST /api/projects/{id}/media/import"
+      ],
+      "acceptance_criteria": [
+        "Imports supported media",
+        "Classifies video/audio",
+        "Persists stream rows",
+        "Reports failed files individually"
+      ],
+      "tests": [
+        "test_import_video",
+        "test_import_audio",
+        "test_import_missing_file"
+      ]
+    },
+    {
+      "id": "DYS-201",
+      "phase": "Phase 2",
+      "title": "生成 flat timeline",
+      "description": "Generate flat_timelines and flat_timeline_items for selected media.",
+      "dependencies": [
+        "DYS-104"
+      ],
+      "outputs": [
+        "TimelineService.generate_flat_timeline",
+        "POST /api/projects/{id}/flat-timelines"
+      ],
+      "acceptance_criteria": [
+        "Sorts by filename",
+        "Uses gap_ms",
+        "Rejects media_type mismatch",
+        "Stores item time ranges"
+      ],
+      "tests": [
+        "test_generate_flat_timeline_two_items",
+        "test_flat_timeline_media_type_mismatch"
+      ]
+    },
+    {
+      "id": "DYS-202",
+      "phase": "Phase 2",
+      "title": "flat time / source time 映射",
+      "description": "Implement bidirectional time mapping utilities.",
+      "dependencies": [
+        "DYS-201"
+      ],
+      "outputs": [
+        "map_flat_to_source",
+        "map_source_to_flat"
+      ],
+      "acceptance_criteria": [
+        "Maps inside item",
+        "Warns for gap",
+        "Warns for boundary crossing"
+      ],
+      "tests": [
+        "test_map_flat_to_source_ok",
+        "test_map_flat_to_source_gap",
+        "test_map_subtitle_cross_boundary"
+      ]
+    },
+    {
+      "id": "DYS-301",
+      "phase": "Phase 3",
+      "title": "SRT parser",
+      "description": "Parse SRT files to subtitle entries with start/end ms and raw text.",
+      "dependencies": [],
+      "outputs": [
+        "parse_srt"
+      ],
+      "acceptance_criteria": [
+        "Parses multiline text",
+        "Parses comma milliseconds",
+        "Raises SUBTITLE_PARSE_FAILED with line info"
+      ],
+      "tests": [
+        "test_srt_parse_basic",
+        "test_srt_parse_multiline",
+        "test_srt_parse_invalid"
+      ]
+    },
+    {
+      "id": "DYS-302",
+      "phase": "Phase 3",
+      "title": "字幕文本规范化",
+      "description": "Normalize subtitle text for Chinese/English search.",
+      "dependencies": [],
+      "outputs": [
+        "normalize_subtitle_text"
+      ],
+      "acceptance_criteria": [
+        "Removes punctuation",
+        "Removes spaces",
+        "Lowercases English",
+        "Keeps Chinese characters"
+      ],
+      "tests": [
+        "test_normalize_chinese_text",
+        "test_normalize_mixed_text"
+      ]
+    },
+    {
+      "id": "DYS-303",
+      "phase": "Phase 3",
+      "title": "导入字幕并映射",
+      "description": "Import SRT into subtitle_tracks/subtitles and map flat time to source media time.",
+      "dependencies": [
+        "DYS-201",
+        "DYS-202",
+        "DYS-301",
+        "DYS-302"
+      ],
+      "outputs": [
+        "SubtitleService.import_srt",
+        "POST /api/projects/{id}/subtitles/import"
+      ],
+      "acceptance_criteria": [
+        "Creates subtitle_track",
+        "Creates subtitles",
+        "Populates source_media_file_id",
+        "Marks warnings"
+      ],
+      "tests": [
+        "test_import_srt_and_map",
+        "test_import_srt_cross_boundary_warning"
+      ]
+    },
+    {
+      "id": "DYS-304",
+      "phase": "Phase 3",
+      "title": "字幕 FTS5 索引",
+      "description": "Ensure subtitles are indexed in subtitles_fts and searchable.",
+      "dependencies": [
+        "DYS-303"
+      ],
+      "outputs": [
+        "SubtitleSearchRepository"
+      ],
+      "acceptance_criteria": [
+        "Inserted subtitles appear in FTS",
+        "Updated subtitles update FTS",
+        "Deleted subtitles delete FTS"
+      ],
+      "tests": [
+        "test_subtitle_fts_insert",
+        "test_subtitle_fts_update",
+        "test_subtitle_fts_delete"
+      ]
+    },
+    {
+      "id": "DYS-305",
+      "phase": "Phase 3",
+      "title": "统一字幕搜索 API",
+      "description": "Search video_ref and external_audio subtitle tracks and return grouped results.",
+      "dependencies": [
+        "DYS-304"
+      ],
+      "outputs": [
+        "GET /api/projects/{id}/subtitles/search"
+      ],
+      "acceptance_criteria": [
+        "Returns video_results",
+        "Returns audio_results",
+        "Includes media file and source_start_ms",
+        "Limit parameter works"
+      ],
+      "tests": [
+        "test_search_subtitles_grouped",
+        "test_search_subtitles_limit"
+      ]
+    },
+    {
+      "id": "DYS-401",
+      "phase": "Phase 4",
+      "title": "手动锚点 offset 计算",
+      "description": "Create accepted_manual sync_result from selected video/audio subtitles.",
+      "dependencies": [
+        "DYS-303"
+      ],
+      "outputs": [
+        "SyncService.create_manual_anchor_sync",
+        "POST /api/projects/{id}/sync/manual-anchor"
+      ],
+      "acceptance_criteria": [
+        "Computes offset_ms",
+        "Saves sync_result",
+        "Links anchor subtitle IDs",
+        "Rejects unmapped subtitles"
+      ],
+      "tests": [
+        "test_manual_anchor_offset",
+        "test_manual_anchor_rejects_unmapped"
+      ]
+    },
+    {
+      "id": "DYS-402",
+      "phase": "Phase 4",
+      "title": "同步结果列表 API",
+      "description": "List sync_results for UI review/export.",
+      "dependencies": [
+        "DYS-401"
+      ],
+      "outputs": [
+        "GET /api/projects/{id}/sync/results"
+      ],
+      "acceptance_criteria": [
+        "Returns sync results sorted by created_at",
+        "Includes file names and anchor texts"
+      ],
+      "tests": [
+        "test_list_sync_results"
+      ]
+    },
+    {
+      "id": "DYS-403",
+      "phase": "Phase 4",
+      "title": "CSV 导出",
+      "description": "Export accepted sync_results to sync_report.csv with required columns.",
+      "dependencies": [
+        "DYS-401"
+      ],
+      "outputs": [
+        "ExportService.export_sync_report_csv",
+        "POST /api/projects/{id}/exports/csv"
+      ],
+      "acceptance_criteria": [
+        "Writes CSV with UTF-8",
+        "Includes required columns",
+        "Creates export_job row"
+      ],
+      "tests": [
+        "test_csv_export_columns",
+        "test_csv_export_utf8"
+      ]
+    },
+    {
+      "id": "DYS-404",
+      "phase": "Phase 4",
+      "title": "端到端 MVP 测试",
+      "description": "Run a full flow with mock media and real SRT files.",
+      "dependencies": [
+        "DYS-101",
+        "DYS-104",
+        "DYS-201",
+        "DYS-303",
+        "DYS-305",
+        "DYS-401",
+        "DYS-403"
+      ],
+      "outputs": [
+        "tests/e2e/test_mvp_flow.py"
+      ],
+      "acceptance_criteria": [
+        "Create project",
+        "Import media",
+        "Generate flat timelines",
+        "Import subtitles",
+        "Search",
+        "Manual sync",
+        "CSV export"
+      ],
+      "tests": [
+        "test_mvp_flow"
+      ]
+    }
+  ]
+}

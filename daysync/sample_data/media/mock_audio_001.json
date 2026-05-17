@@ -1,0 +1,17 @@
+{
+  "format": {
+    "filename": "ZOOM0001.wav",
+    "duration": "600.000000",
+    "format_name": "wav"
+  },
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "audio",
+      "codec_name": "pcm_s16le",
+      "sample_rate": "48000",
+      "channels": 2,
+      "duration": "600.000000"
+    }
+  ]
+}

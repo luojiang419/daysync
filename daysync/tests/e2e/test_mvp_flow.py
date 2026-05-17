@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from services.api.main import app
+
+
+def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
+    sample_root = Path(__file__).resolve().parents[2] / "sample_data"
+    fixtures = {
+        "A001_C001.mov": json.loads((sample_root / "media" / "mock_video_001.json").read_text(encoding="utf-8")),
+        "A001_C002.mov": json.loads((sample_root / "media" / "mock_video_002.json").read_text(encoding="utf-8")),
+        "ZOOM0001.wav": json.loads((sample_root / "media" / "mock_audio_001.json").read_text(encoding="utf-8")),
+    }
+
+    def fake_probe(media_path: Path) -> dict[str, object]:
+        from daysync_core.media.ffprobe import parse_ffprobe_payload
+
+        return parse_ffprobe_payload(media_path, fixtures[media_path.name])
+
+    monkeypatch.setattr("daysync_core.media.service.probe_media", fake_probe)
+
+    client = TestClient(app)
+    project_root = tmp_path / "project"
+    create_response = client.post(
+        "/api/projects",
+        json={
+            "name": "纪录片样片 2026-01-01",
+            "root_path": str(project_root),
+            "shooting_date": "2026-01-01",
+        },
+    )
+    assert create_response.status_code == 200
+    project_id = create_response.json()["project"]["id"]
+
+    media_import = client.post(
+        f"/api/projects/{project_id}/media/import",
+        json={
+            "paths": [
+                str(sample_root / "media" / "A001_C001.mov"),
+                str(sample_root / "media" / "A001_C002.mov"),
+                str(sample_root / "media" / "ZOOM0001.wav"),
+            ],
+            "session_id": None,
+        },
+    )
+    assert media_import.status_code == 200
+    imported = media_import.json()["imported"]
+    video_ids = [item["id"] for item in imported if item["media_type"] == "video"]
+    audio_ids = [item["id"] for item in imported if item["media_type"] == "audio"]
+
+    video_timeline = client.post(
+        f"/api/projects/{project_id}/flat-timelines",
+        json={"media_type": "video", "media_file_ids": video_ids, "sort_mode": "filename", "gap_ms": 1000},
+    )
+    audio_timeline = client.post(
+        f"/api/projects/{project_id}/flat-timelines",
+        json={"media_type": "audio", "media_file_ids": audio_ids, "sort_mode": "filename", "gap_ms": 1000},
+    )
+    assert video_timeline.status_code == 200
+    assert audio_timeline.status_code == 200
+
+    video_subtitles = client.post(
+        f"/api/projects/{project_id}/subtitles/import",
+        json={
+            "flat_timeline_id": video_timeline.json()["flat_timeline_id"],
+            "track_type": "video_ref",
+            "source_type": "srt_import",
+            "path": str(sample_root / "subtitles" / "video_flat.srt"),
+            "language": "zh-CN",
+        },
+    )
+    audio_subtitles = client.post(
+        f"/api/projects/{project_id}/subtitles/import",
+        json={
+            "flat_timeline_id": audio_timeline.json()["flat_timeline_id"],
+            "track_type": "external_audio",
+            "source_type": "srt_import",
+            "path": str(sample_root / "subtitles" / "audio_flat.srt"),
+            "language": "zh-CN",
+        },
+    )
+    assert video_subtitles.json()["imported_count"] == 2
+    assert audio_subtitles.json()["imported_count"] == 2
+
+    search_response = client.get(
+        f"/api/projects/{project_id}/subtitles/search",
+        params={"q": "我们到了这里", "limit": 20},
+    )
+    assert search_response.status_code == 200
+    search_data = search_response.json()
+    assert len(search_data["video_results"]) == 1
+    assert len(search_data["audio_results"]) == 1
+
+    sync_response = client.post(
+        f"/api/projects/{project_id}/sync/manual-anchor",
+        json={
+            "video_subtitle_id": search_data["video_results"][0]["subtitle_id"],
+            "audio_subtitle_id": search_data["audio_results"][0]["subtitle_id"],
+        },
+    )
+    assert sync_response.status_code == 200
+    assert sync_response.json()["sync_result"]["offset_ms"] == 574180
+
+    export_response = client.post(
+        f"/api/projects/{project_id}/exports/csv",
+        json={"output_path": str(tmp_path / "exports" / "sync_report.csv")},
+    )
+    assert export_response.status_code == 200
+    assert export_response.json()["row_count"] == 1
