@@ -4,21 +4,40 @@ import {
   ApiError,
   exportCsv,
   exportFcp7Xml,
+  listExportJobs,
   listReviewQueue,
   listSyncResults,
   reviewSyncResult,
   saveProjectSettings,
 } from "../api/client";
-import type { ReviewQueueItem, SyncResult } from "../api/types";
+import type { ExportJob, ReviewQueueItem, SyncResult } from "../api/types";
 import { ReviewQueueCard } from "../components/ReviewQueueCard";
 import { SyncResultCard } from "../components/SyncResultCard";
 import { chooseDirectory } from "../api/tauri";
 import { useAppState } from "../state/AppState";
 
+function formatExportType(exportType: ExportJob["export_type"]): string {
+  switch (exportType) {
+    case "csv":
+      return "CSV";
+    case "fcp7_xml":
+      return "FCP 7 XML";
+    case "fcpxml":
+      return "FCPXML";
+    case "otio":
+      return "OTIO";
+    case "json":
+      return "JSON";
+    default:
+      return exportType;
+  }
+}
+
 export function ExportPage() {
   const { state, dispatch } = useAppState();
   const [outputPath, setOutputPath] = useState("");
   const [busy, setBusy] = useState(false);
+  const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
   const [reviewBusyId, setReviewBusyId] = useState<string | null>(null);
   const [adjustOffsets, setAdjustOffsets] = useState<Record<string, string>>({});
@@ -109,6 +128,7 @@ export function ExportPage() {
     }
     void refreshReviewQueue();
     void refreshSyncResults();
+    void refreshExportJobs(true);
   }, [state.currentProject]);
 
   async function refreshSyncResults() {
@@ -143,6 +163,22 @@ export function ExportPage() {
       });
       return next;
     });
+  }
+
+  async function refreshExportJobs(silent = false) {
+    if (!state.currentProject) {
+      return;
+    }
+    try {
+      const response = await listExportJobs(state.currentProject.id);
+      setExportJobs(response.items);
+    } catch (error) {
+      if (silent) {
+        return;
+      }
+      const message = error instanceof ApiError ? error.message : "读取导出历史失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    }
   }
 
   async function handleChooseDirectory() {
@@ -201,6 +237,7 @@ export function ExportPage() {
     try {
       await refreshSyncResults();
       const result = await exportCsv(state.currentProject.id, outputPath);
+      void refreshExportJobs(true);
       dispatch({
         type: "SET_NOTICE",
         payload: { tone: "success", message: `CSV 已导出到 ${result.output_path}，共 ${result.row_count} 行。` },
@@ -224,6 +261,7 @@ export function ExportPage() {
         ? `${outputPath.slice(0, -4)}_fcp7.xml`
         : `${outputPath}_fcp7.xml`;
       const result = await exportFcp7Xml(state.currentProject.id, xmlPath);
+      void refreshExportJobs(true);
       dispatch({
         type: "SET_NOTICE",
         payload: {
@@ -348,6 +386,31 @@ export function ExportPage() {
               onChange={(event) => setMinConfidenceFilter(event.target.value)}
             />
           </label>
+        </div>
+
+        <div className="cluster-sample-list">
+          <div className="card-header">
+            <h3>最近导出记录</h3>
+            <span>显示导出路径和时间，便于回查</span>
+          </div>
+          {exportJobs.map((job) => (
+            <article key={job.id} className="cluster-sample-card">
+              <div className="candidate-card-header">
+                <strong>{formatExportType(job.export_type)}</strong>
+                <span className="status-meta">状态 {job.status}</span>
+              </div>
+              <p className="export-job-path">{job.output_path}</p>
+              <div className="export-job-meta">
+                <span>创建 {job.created_at}</span>
+                <span>{job.completed_at ? `完成 ${job.completed_at}` : "等待完成时间"}</span>
+                {job.row_count !== null && job.row_count !== undefined ? (
+                  <span>{job.export_type === "csv" ? `${job.row_count} 行` : `${job.row_count} 条 sequence`}</span>
+                ) : null}
+              </div>
+              {job.error_message ? <small>{job.error_message}</small> : null}
+            </article>
+          ))}
+          {!exportJobs.length ? <span className="status-meta">当前还没有导出历史。</span> : null}
         </div>
 
         <div className="cluster-sample-list">

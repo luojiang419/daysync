@@ -253,6 +253,18 @@ export type SyncResult = {
   review_events?: ReviewEvent[];
 };
 
+export type ExportJob = {
+  id: string;
+  project_id: string;
+  export_type: "csv" | "fcp7_xml" | "fcpxml" | "otio" | "json";
+  output_path: string;
+  status: "pending" | "running" | "succeeded" | "failed";
+  row_count?: number | null;
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+};
+
 export type ProjectSnapshot = {
   project: Project;
   stats: ProjectStats;

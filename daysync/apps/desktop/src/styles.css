@@ -424,6 +424,19 @@ textarea {
   color: var(--text-soft);
 }
 
+.export-job-path {
+  margin: 0;
+  color: var(--steel);
+  word-break: break-all;
+}
+
+.export-job-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  color: var(--text-soft);
+}
+
 .cluster-result-card {
   display: grid;
   gap: 16px;

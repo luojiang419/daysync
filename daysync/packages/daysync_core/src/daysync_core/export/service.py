@@ -27,6 +27,19 @@ CSV_COLUMNS = [
 ]
 
 
+def list_export_jobs(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
+    rows = connection.execute(
+        """
+        SELECT id, project_id, export_type, output_path, status, row_count, error_message, created_at, completed_at
+        FROM export_jobs
+        WHERE project_id = ?
+        ORDER BY created_at DESC, rowid DESC
+        """,
+        (project_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def export_sync_report_csv(connection: sqlite3.Connection, project_id: str, output_path: str) -> dict[str, object]:
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -369,4 +382,3 @@ def _format_rate(rate: float) -> tuple[int, bool]:
     if abs(rounded - 59.94) < 0.01:
         return 60, True
     return max(1, int(round(rate))), False
-

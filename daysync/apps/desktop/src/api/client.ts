@@ -1,6 +1,7 @@
 import type {
   AutoAcceptDecision,
   AutoCandidateResponse,
+  ExportJob,
   FlatTimeline,
   MediaFile,
   OffsetClusterAnalysisResponse,
@@ -98,6 +99,10 @@ type ExportCsvResponse = {
 type ExportFcp7XmlResponse = {
   output_path: string;
   sequence_count: number;
+};
+
+type ExportJobListResponse = {
+  items: ExportJob[];
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -322,4 +327,8 @@ export async function exportFcp7Xml(
     method: "POST",
     body: JSON.stringify({ output_path: outputPath }),
   });
+}
+
+export async function listExportJobs(projectId: string): Promise<ExportJobListResponse> {
+  return request<ExportJobListResponse>(`/api/projects/${projectId}/exports/jobs`);
 }
