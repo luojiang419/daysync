@@ -205,14 +205,22 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
     assert export_json_response.status_code == 200
     assert export_json_response.json()["item_count"] == 2
 
+    export_otio_response = client.post(
+        f"/api/projects/{project_id}/exports/otio",
+        json={"output_path": str(tmp_path / "exports" / "sync_report.otio")},
+    )
+    assert export_otio_response.status_code == 200
+    assert export_otio_response.json()["item_count"] == 2
+
     export_jobs_response = client.get(f"/api/projects/{project_id}/exports/jobs")
     assert export_jobs_response.status_code == 200
     export_jobs = export_jobs_response.json()["items"]
-    assert len(export_jobs) == 3
-    assert export_jobs[0]["export_type"] == "json"
+    assert len(export_jobs) == 4
+    assert export_jobs[0]["export_type"] == "otio"
     assert export_jobs[0]["status"] == "succeeded"
-    assert export_jobs[1]["export_type"] == "fcp7_xml"
-    assert export_jobs[2]["export_type"] == "csv"
+    assert export_jobs[1]["export_type"] == "json"
+    assert export_jobs[2]["export_type"] == "fcp7_xml"
+    assert export_jobs[3]["export_type"] == "csv"
 
     settings_response = client.put(
         f"/api/projects/{project_id}/settings",

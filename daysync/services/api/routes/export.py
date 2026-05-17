@@ -3,9 +3,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from daysync_core.db import connect_database, database_path_for_project
-from daysync_core.export import export_sync_report_csv, export_sync_report_fcp7_xml, export_sync_report_json, list_export_jobs
+from daysync_core.export import (
+    export_sync_report_csv,
+    export_sync_report_fcp7_xml,
+    export_sync_report_json,
+    export_sync_report_otio,
+    list_export_jobs,
+)
 
-from ..schemas.models import ExportCsvRequest, ExportFcp7XmlRequest, ExportJsonRequest
+from ..schemas.models import ExportCsvRequest, ExportFcp7XmlRequest, ExportJsonRequest, ExportOtioRequest
 
 router = APIRouter(prefix="/projects/{project_id}/exports", tags=["export"])
 
@@ -40,3 +46,12 @@ def export_json_route(
     root_path = request.app.state.runtime.resolve(project_id)
     with connect_database(database_path_for_project(root_path)) as connection:
         return export_sync_report_json(connection, project_id, payload.output_path)
+
+
+@router.post("/otio")
+def export_otio_route(
+    project_id: str, payload: ExportOtioRequest, request: Request
+) -> dict[str, object]:
+    root_path = request.app.state.runtime.resolve(project_id)
+    with connect_database(database_path_for_project(root_path)) as connection:
+        return export_sync_report_otio(connection, project_id, payload.output_path)

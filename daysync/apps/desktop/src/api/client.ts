@@ -344,6 +344,16 @@ export async function exportJson(
   });
 }
 
+export async function exportOtio(
+  projectId: string,
+  outputPath: string,
+): Promise<ExportJsonResponse> {
+  return request<ExportJsonResponse>(`/api/projects/${projectId}/exports/otio`, {
+    method: "POST",
+    body: JSON.stringify({ output_path: outputPath }),
+  });
+}
+
 export async function listExportJobs(projectId: string): Promise<ExportJobListResponse> {
   return request<ExportJobListResponse>(`/api/projects/${projectId}/exports/jobs`);
 }

@@ -131,6 +131,47 @@ def export_sync_report_json(connection: sqlite3.Connection, project_id: str, out
     return {"output_path": str(target), "item_count": len(rows)}
 
 
+def export_sync_report_otio(connection: sqlite3.Connection, project_id: str, output_path: str) -> dict[str, object]:
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    export_job_id = new_uuid()
+    created_at = utc_now_iso()
+    connection.execute(
+        """
+        INSERT INTO export_jobs (id, project_id, export_type, output_path, status, created_at)
+        VALUES (?, ?, 'otio', ?, 'running', ?)
+        """,
+        (export_job_id, project_id, str(target), created_at),
+    )
+    rows = _load_rich_sync_export_rows(connection, project_id)
+
+    try:
+        otio_payload = _build_otio_timeline(connection, project_id, rows, created_at)
+        target.write_text(json.dumps(otio_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        connection.execute(
+            """
+            UPDATE export_jobs
+            SET status = 'failed', error_message = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (str(exc), utc_now_iso(), export_job_id),
+        )
+        connection.commit()
+        raise DaySyncError("EXPORT_FAILED", f"Failed to export OTIO: {exc}") from exc
+
+    connection.execute(
+        """
+        UPDATE export_jobs
+        SET status = 'succeeded', row_count = ?, completed_at = ?
+        WHERE id = ?
+        """,
+        (len(rows), utc_now_iso(), export_job_id),
+    )
+    connection.commit()
+    return {"output_path": str(target), "item_count": len(rows)}
+
+
 def export_sync_report_fcp7_xml(
     connection: sqlite3.Connection, project_id: str, output_path: str
 ) -> dict[str, object]:
@@ -145,25 +186,7 @@ def export_sync_report_fcp7_xml(
         """,
         (export_job_id, project_id, str(target), created_at),
     )
-    rows = connection.execute(
-        """
-        SELECT sr.id AS sync_result_id, sr.status, sr.source, sr.confidence_score,
-               sr.video_media_file_id, sr.audio_media_file_id,
-               sr.video_in_ms, sr.video_out_ms, sr.audio_in_ms, sr.audio_out_ms, sr.offset_ms,
-               vm.filename AS video_file, vm.original_path AS video_path, vm.duration_ms AS video_duration_ms,
-               am.filename AS audio_file, am.original_path AS audio_path, am.duration_ms AS audio_duration_ms,
-               vs.raw_text AS video_anchor_text, aus.raw_text AS audio_anchor_text
-        FROM sync_results sr
-        JOIN media_files vm ON vm.id = sr.video_media_file_id
-        JOIN media_files am ON am.id = sr.audio_media_file_id
-        LEFT JOIN subtitles vs ON vs.id = sr.video_anchor_subtitle_id
-        LEFT JOIN subtitles aus ON aus.id = sr.audio_anchor_subtitle_id
-        WHERE sr.project_id = ?
-          AND sr.status IN ('accepted_manual', 'accepted_auto')
-        ORDER BY sr.created_at
-        """,
-        (project_id,),
-    ).fetchall()
+    rows = _load_rich_sync_export_rows(connection, project_id)
 
     try:
         xml_content = _build_fcp7_xml(connection, project_id, rows)
@@ -210,6 +233,131 @@ def _load_sync_export_rows(connection: sqlite3.Connection, project_id: str) -> l
         """,
         (project_id,),
     ).fetchall()
+
+
+def _load_rich_sync_export_rows(connection: sqlite3.Connection, project_id: str) -> list[sqlite3.Row]:
+    return connection.execute(
+        """
+        SELECT sr.id AS sync_result_id, sr.status, sr.source, sr.confidence_score,
+               sr.video_media_file_id, sr.audio_media_file_id,
+               sr.video_in_ms, sr.video_out_ms, sr.audio_in_ms, sr.audio_out_ms, sr.offset_ms,
+               vm.filename AS video_file, vm.original_path AS video_path, vm.duration_ms AS video_duration_ms,
+               am.filename AS audio_file, am.original_path AS audio_path, am.duration_ms AS audio_duration_ms,
+               vs.raw_text AS video_anchor_text, aus.raw_text AS audio_anchor_text, sr.created_at
+        FROM sync_results sr
+        JOIN media_files vm ON vm.id = sr.video_media_file_id
+        JOIN media_files am ON am.id = sr.audio_media_file_id
+        LEFT JOIN subtitles vs ON vs.id = sr.video_anchor_subtitle_id
+        LEFT JOIN subtitles aus ON aus.id = sr.audio_anchor_subtitle_id
+        WHERE sr.project_id = ?
+          AND sr.status IN ('accepted_manual', 'accepted_auto')
+        ORDER BY sr.created_at
+        """,
+        (project_id,),
+    ).fetchall()
+
+
+def _build_otio_timeline(
+    connection: sqlite3.Connection, project_id: str, rows: list[sqlite3.Row], exported_at: str
+) -> dict[str, object]:
+    master_rate = _load_master_rate(connection, rows)
+    video_children: list[dict[str, object]] = []
+    audio_children: list[dict[str, object]] = []
+
+    for row in rows:
+        layout = _build_sequence_layout_ms(row)
+        video_metadata = _build_otio_clip_metadata(row, "video")
+        audio_metadata = _build_otio_clip_metadata(row, "audio")
+
+        if layout["video_timeline_start_ms"] > 0:
+            video_children.append(_build_otio_gap(layout["video_timeline_start_ms"], master_rate, "video-gap"))
+        video_children.append(
+            _build_otio_clip(
+                name=row["video_file"],
+                media_path=row["video_path"],
+                media_duration_ms=row["video_duration_ms"],
+                clip_start_ms=layout["video_in_ms"],
+                clip_duration_ms=row["video_out_ms"] - row["video_in_ms"],
+                rate=master_rate,
+                metadata=video_metadata,
+            )
+        )
+        if layout["sequence_duration_ms"] > layout["video_timeline_end_ms"]:
+            video_children.append(
+                _build_otio_gap(
+                    layout["sequence_duration_ms"] - layout["video_timeline_end_ms"],
+                    master_rate,
+                    "video-trailing-gap",
+                )
+            )
+
+        if layout["audio_timeline_start_ms"] > 0:
+            audio_children.append(_build_otio_gap(layout["audio_timeline_start_ms"], master_rate, "audio-gap"))
+        audio_children.append(
+            _build_otio_clip(
+                name=row["audio_file"],
+                media_path=row["audio_path"],
+                media_duration_ms=row["audio_duration_ms"],
+                clip_start_ms=layout["audio_in_ms"],
+                clip_duration_ms=row["audio_out_ms"] - row["audio_in_ms"],
+                rate=master_rate,
+                metadata=audio_metadata,
+            )
+        )
+        if layout["sequence_duration_ms"] > layout["audio_timeline_end_ms"]:
+            audio_children.append(
+                _build_otio_gap(
+                    layout["sequence_duration_ms"] - layout["audio_timeline_end_ms"],
+                    master_rate,
+                    "audio-trailing-gap",
+                )
+            )
+
+    return {
+        "OTIO_SCHEMA": "Timeline.1",
+        "name": f"DaySync OTIO Export {project_id}",
+        "global_start_time": _build_otio_rational_time(0, master_rate),
+        "metadata": {
+            "daysync": {
+                "project_id": project_id,
+                "exported_at": exported_at,
+                "sync_result_count": len(rows),
+            }
+        },
+        "tracks": {
+            "OTIO_SCHEMA": "Stack.1",
+            "name": "tracks",
+            "source_range": None,
+            "effects": [],
+            "markers": [],
+            "enabled": True,
+            "metadata": {"daysync": {"export_type": "otio"}},
+            "children": [
+                {
+                    "OTIO_SCHEMA": "Track.1",
+                    "name": "V1",
+                    "kind": "Video",
+                    "source_range": None,
+                    "effects": [],
+                    "markers": [],
+                    "enabled": True,
+                    "metadata": {"daysync": {"track_role": "video"}},
+                    "children": video_children,
+                },
+                {
+                    "OTIO_SCHEMA": "Track.1",
+                    "name": "A1",
+                    "kind": "Audio",
+                    "source_range": None,
+                    "effects": [],
+                    "markers": [],
+                    "enabled": True,
+                    "metadata": {"daysync": {"track_role": "audio"}},
+                    "children": audio_children,
+                },
+            ],
+        },
+    }
 
 
 def _build_fcp7_xml(
@@ -293,6 +441,21 @@ def _build_fcp7_xml(
 
 
 def _build_sequence_layout(row: sqlite3.Row, rate: float) -> dict[str, int]:
+    layout_ms = _build_sequence_layout_ms(row)
+    return {
+        "video_timeline_start_frames": _ms_to_frames(layout_ms["video_timeline_start_ms"], rate),
+        "video_timeline_end_frames": _ms_to_frames(layout_ms["video_timeline_end_ms"], rate),
+        "audio_timeline_start_frames": _ms_to_frames(layout_ms["audio_timeline_start_ms"], rate),
+        "audio_timeline_end_frames": _ms_to_frames(layout_ms["audio_timeline_end_ms"], rate),
+        "video_in_frames": _ms_to_frames(layout_ms["video_in_ms"], rate),
+        "video_out_frames": _ms_to_frames(row["video_out_ms"], rate),
+        "audio_in_frames": _ms_to_frames(layout_ms["audio_in_ms"], rate),
+        "audio_out_frames": _ms_to_frames(max(row["audio_out_ms"], 0), rate),
+        "sequence_duration_frames": _ms_to_frames(layout_ms["sequence_duration_ms"], rate),
+    }
+
+
+def _build_sequence_layout_ms(row: sqlite3.Row) -> dict[str, int]:
     video_duration_ms = row["video_out_ms"] - row["video_in_ms"]
     audio_duration_ms = row["audio_out_ms"] - row["audio_in_ms"]
     if row["audio_in_ms"] < 0:
@@ -315,16 +478,96 @@ def _build_sequence_layout(row: sqlite3.Row, rate: float) -> dict[str, int]:
     audio_timeline_end_ms = audio_timeline_start_ms + audio_duration_ms
     sequence_duration_ms = max(video_timeline_end_ms, audio_timeline_end_ms)
     return {
-        "video_timeline_start_frames": _ms_to_frames(video_timeline_start_ms, rate),
-        "video_timeline_end_frames": _ms_to_frames(video_timeline_end_ms, rate),
-        "audio_timeline_start_frames": _ms_to_frames(audio_timeline_start_ms, rate),
-        "audio_timeline_end_frames": _ms_to_frames(audio_timeline_end_ms, rate),
-        "video_in_frames": _ms_to_frames(video_in_ms, rate),
-        "video_out_frames": _ms_to_frames(row["video_out_ms"], rate),
-        "audio_in_frames": _ms_to_frames(audio_in_ms, rate),
-        "audio_out_frames": _ms_to_frames(max(row["audio_out_ms"], 0), rate),
-        "sequence_duration_frames": _ms_to_frames(sequence_duration_ms, rate),
+        "video_timeline_start_ms": video_timeline_start_ms,
+        "video_timeline_end_ms": video_timeline_end_ms,
+        "audio_timeline_start_ms": audio_timeline_start_ms,
+        "audio_timeline_end_ms": audio_timeline_end_ms,
+        "video_in_ms": video_in_ms,
+        "audio_in_ms": audio_in_ms,
+        "sequence_duration_ms": sequence_duration_ms,
     }
+
+
+def _build_otio_gap(duration_ms: int, rate: float, name: str) -> dict[str, object]:
+    return {
+        "OTIO_SCHEMA": "Gap.1",
+        "name": name,
+        "source_range": _build_otio_time_range(0, duration_ms, rate),
+        "effects": [],
+        "markers": [],
+        "enabled": True,
+        "metadata": {},
+    }
+
+
+def _build_otio_clip(
+    *,
+    name: str,
+    media_path: str,
+    media_duration_ms: int,
+    clip_start_ms: int,
+    clip_duration_ms: int,
+    rate: float,
+    metadata: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "OTIO_SCHEMA": "Clip.2",
+        "name": name,
+        "source_range": _build_otio_time_range(clip_start_ms, clip_duration_ms, rate),
+        "effects": [],
+        "markers": [],
+        "enabled": True,
+        "metadata": metadata,
+        "active_media_reference_key": "DEFAULT_MEDIA",
+        "media_references": {
+            "DEFAULT_MEDIA": {
+                "OTIO_SCHEMA": "ExternalReference.1",
+                "name": name,
+                "available_range": _build_otio_time_range(0, media_duration_ms, rate),
+                "available_image_bounds": None,
+                "metadata": {},
+                "target_url": Path(media_path).as_uri(),
+            }
+        },
+    }
+
+
+def _build_otio_time_range(start_ms: int, duration_ms: int, rate: float) -> dict[str, object]:
+    return {
+        "OTIO_SCHEMA": "TimeRange.1",
+        "start_time": _build_otio_rational_time(start_ms, rate),
+        "duration": _build_otio_rational_time(duration_ms, rate),
+    }
+
+
+def _build_otio_rational_time(value_ms: int | float, rate: float) -> dict[str, object]:
+    return {
+        "OTIO_SCHEMA": "RationalTime.1",
+        "rate": rate,
+        "value": _ms_to_frames(value_ms, rate),
+    }
+
+
+def _build_otio_clip_metadata(row: sqlite3.Row, clip_role: str) -> dict[str, object]:
+    return {
+        "daysync": {
+            "sync_result_id": row["sync_result_id"],
+            "clip_role": clip_role,
+            "status": row["status"],
+            "source": row["source"],
+            "confidence_score": row["confidence_score"],
+            "offset_ms": row["offset_ms"],
+            "video_anchor_text": row["video_anchor_text"],
+            "audio_anchor_text": row["audio_anchor_text"],
+            "created_at": row["created_at"],
+        }
+    }
+
+
+def _load_master_rate(connection: sqlite3.Connection, rows: list[sqlite3.Row]) -> float:
+    if not rows:
+        return 25.0
+    return _load_video_rate(connection, rows[0]["video_media_file_id"])
 
 
 def _append_file_reference(

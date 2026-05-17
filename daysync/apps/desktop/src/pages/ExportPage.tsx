@@ -5,6 +5,7 @@ import {
   exportCsv,
   exportFcp7Xml,
   exportJson,
+  exportOtio,
   listExportJobs,
   listReviewQueue,
   listSyncResults,
@@ -32,6 +33,19 @@ function formatExportType(exportType: ExportJob["export_type"]): string {
     default:
       return exportType;
   }
+}
+
+function formatExportJobCount(job: ExportJob): string | null {
+  if (job.row_count === null || job.row_count === undefined) {
+    return null;
+  }
+  if (job.export_type === "csv") {
+    return `${job.row_count} 行`;
+  }
+  if (job.export_type === "fcp7_xml" || job.export_type === "fcpxml") {
+    return `${job.row_count} 条 sequence`;
+  }
+  return `${job.row_count} 条同步结果`;
 }
 
 export function ExportPage() {
@@ -305,6 +319,33 @@ export function ExportPage() {
     }
   }
 
+  async function handleExportOtio() {
+    if (!state.currentProject) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await refreshSyncResults();
+      const otioPath = outputPath.toLowerCase().endsWith(".csv")
+        ? `${outputPath.slice(0, -4)}.otio`
+        : `${outputPath}.otio`;
+      const result = await exportOtio(state.currentProject.id, otioPath);
+      void refreshExportJobs(true);
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: "success",
+          message: `OTIO 已导出到 ${result.output_path}，共 ${result.item_count} 条同步结果。`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "导出 OTIO 失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="page-grid">
       <article className="panel-card span-two">
@@ -342,8 +383,8 @@ export function ExportPage() {
 
       <article className="panel-card span-two">
         <header className="card-header">
-          <h2>同步结果与 CSV 导出</h2>
-          <span>只导出 `accepted_manual / accepted_auto` 结果</span>
+          <h2>同步结果与多格式导出</h2>
+          <span>支持 `CSV / FCP 7 XML / JSON / OTIO`，只导出 `accepted_manual / accepted_auto` 结果</span>
         </header>
 
         <div className="metrics-grid">
@@ -389,6 +430,14 @@ export function ExportPage() {
             onClick={handleExportJson}
           >
             {busy ? "导出中..." : "导出 JSON"}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!outputPath || busy}
+            onClick={handleExportOtio}
+          >
+            {busy ? "导出中..." : "导出 OTIO"}
           </button>
         </form>
 
@@ -439,9 +488,7 @@ export function ExportPage() {
               <div className="export-job-meta">
                 <span>创建 {job.created_at}</span>
                 <span>{job.completed_at ? `完成 ${job.completed_at}` : "等待完成时间"}</span>
-                {job.row_count !== null && job.row_count !== undefined ? (
-                  <span>{job.export_type === "csv" ? `${job.row_count} 行` : `${job.row_count} 条 sequence`}</span>
-                ) : null}
+                {formatExportJobCount(job) ? <span>{formatExportJobCount(job)}</span> : null}
               </div>
               {job.error_message ? <small>{job.error_message}</small> : null}
             </article>

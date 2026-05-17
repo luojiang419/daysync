@@ -50,6 +50,7 @@ vi.mock("../src/api/client", async () => {
     exportCsv: vi.fn(),
     exportFcp7Xml: vi.fn(),
     exportJson: vi.fn(),
+    exportOtio: vi.fn(),
     listExportJobs: vi.fn(),
     listReviewQueue: vi.fn(),
     listSyncResults: vi.fn(),
@@ -73,8 +74,8 @@ describe("ExportPage", () => {
         {
           id: "export-2",
           project_id: "project-1",
-          export_type: "fcp7_xml",
-          output_path: "D:\\exports\\sync_report_fcp7.xml",
+          export_type: "json",
+          output_path: "D:\\exports\\sync_report.json",
           status: "succeeded",
           row_count: 2,
           error_message: null,
@@ -87,9 +88,10 @@ describe("ExportPage", () => {
     render(<ExportPage />);
 
     expect(screen.getByText("最近导出记录")).toBeInTheDocument();
-    expect(await screen.findByText("D:\\exports\\sync_report_fcp7.xml")).toBeInTheDocument();
+    expect(await screen.findByText("D:\\exports\\sync_report.json")).toBeInTheDocument();
     expect(screen.getByText(/创建 2026-05-17T13:45:04Z/)).toBeInTheDocument();
     expect(screen.getByText(/完成 2026-05-17T13:45:05Z/)).toBeInTheDocument();
+    expect(screen.getByText("2 条同步结果")).toBeInTheDocument();
 
     await waitFor(() => {
       expect(apiClient.listExportJobs).toHaveBeenCalledWith("project-1");
@@ -115,6 +117,29 @@ describe("ExportPage", () => {
       expect(apiClient.exportJson).toHaveBeenCalledWith(
         "project-1",
         "D:\\projects\\demo\\exports\\sync_report.json",
+      );
+    });
+  });
+
+  it("点击导出 OTIO 时写入默认 otio 路径", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.listReviewQueue).mockResolvedValue({ items: [] });
+    vi.mocked(apiClient.listSyncResults).mockResolvedValue({ sync_results: [] });
+    vi.mocked(apiClient.listExportJobs).mockResolvedValue({ items: [] });
+    vi.mocked(apiClient.exportOtio).mockResolvedValue({
+      output_path: "D:\\projects\\demo\\exports\\sync_report.otio",
+      item_count: 0,
+    });
+
+    render(<ExportPage />);
+
+    await screen.findByText("导出 OTIO");
+    await user.click(screen.getByRole("button", { name: "导出 OTIO" }));
+
+    await waitFor(() => {
+      expect(apiClient.exportOtio).toHaveBeenCalledWith(
+        "project-1",
+        "D:\\projects\\demo\\exports\\sync_report.otio",
       );
     });
   });
