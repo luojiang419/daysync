@@ -88,6 +88,7 @@ describe("ExportPage", () => {
 
     render(<ExportPage />);
 
+    expect(screen.getByText(/CSV \/ FCP 7 XML \/ JSON \/ OTIO \/ FCPXML/)).toBeInTheDocument();
     expect(screen.getByText("最近导出记录")).toBeInTheDocument();
     expect(await screen.findByText("D:\\exports\\sync_report.json")).toBeInTheDocument();
     expect(screen.getByText(/创建 2026-05-17T13:45:04Z/)).toBeInTheDocument();

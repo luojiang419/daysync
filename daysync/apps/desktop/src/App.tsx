@@ -59,6 +59,15 @@ function App() {
               }
             } catch {
               clearLastProjectRoot();
+              if (!cancelled) {
+                dispatch({
+                  type: "SET_NOTICE",
+                  payload: {
+                    tone: "error",
+                    message: "上次项目目录已失效，自动恢复记录已清除，请重新打开项目。",
+                  },
+                });
+              }
             }
           }
           const ffmpegMessage = health.ffmpeg.ready

@@ -415,7 +415,7 @@ export function ExportPage() {
       <article className="panel-card span-two">
         <header className="card-header">
           <h2>同步结果与多格式导出</h2>
-          <span>支持 `CSV / FCP 7 XML / JSON / OTIO`，只导出 `accepted_manual / accepted_auto` 结果</span>
+          <span>支持 `CSV / FCP 7 XML / JSON / OTIO / FCPXML`，只导出 `accepted_manual / accepted_auto` 结果</span>
         </header>
 
         <div className="metrics-grid">

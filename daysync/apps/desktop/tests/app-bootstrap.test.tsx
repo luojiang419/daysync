@@ -81,4 +81,25 @@ describe("App bootstrap", () => {
       expect(apiClient.openProject).toHaveBeenCalledWith("D:\\projects\\demo");
     });
   });
+
+  it("上次项目目录失效时会清除自动恢复记录", async () => {
+    const apiClient = await import("../src/api/client");
+    vi.mocked(apiClient.openProject).mockRejectedValueOnce(new Error("missing project"));
+    window.localStorage.setItem("daysync.last_project_root", "D:\\projects\\missing");
+
+    const view = render(
+      <AppStateProvider>
+        <App />
+      </AppStateProvider>,
+    );
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem("daysync.last_project_root")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(
+        view.getByText("上次项目目录已失效，自动恢复记录已清除，请重新打开项目。"),
+      ).toBeInTheDocument();
+    });
+  });
 });
