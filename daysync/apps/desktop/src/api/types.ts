@@ -83,6 +83,11 @@ export type AutoCandidate = {
   text_similarity: number;
   context_similarity: number;
   final_score: number;
+  candidate_margin: number;
+  reverse_margin: number;
+  reverse_match_consistent: boolean;
+  reverse_top_subtitle_id?: string | null;
+  reverse_top_raw_text?: string | null;
   negative_evidence_count: number;
   duplicate_count: number;
   context_before_text: string;
@@ -108,11 +113,63 @@ export type AutoCandidateResponse = {
     context_before_text: string;
     context_after_text: string;
     context_window_text: string;
+    duplicate_count: number;
   };
   target_track_type: "video_ref" | "external_audio";
   limit: number;
   context_radius: number;
   candidates: AutoCandidate[];
+};
+
+export type OffsetClusterSample = {
+  video_subtitle_id: string;
+  video_text: string;
+  video_source_filename?: string | null;
+  audio_subtitle_id: string;
+  audio_text: string;
+  audio_source_filename?: string | null;
+};
+
+export type OffsetClusterPairAnalysis = {
+  video_subtitle_id: string;
+  video_text: string;
+  video_source_filename?: string | null;
+  video_source_start_ms: number;
+  audio_subtitle_id: string;
+  audio_text: string;
+  audio_source_filename?: string | null;
+  audio_source_start_ms: number;
+  offset_ms: number;
+  text_similarity: number;
+  context_similarity: number;
+  final_score: number;
+  candidate_margin: number;
+  reverse_margin: number;
+  reverse_match_consistent: boolean;
+  negative_evidence_count: number;
+  mapping_warning?: string | null;
+  reverse_top_subtitle_id?: string | null;
+  reverse_top_raw_text?: string | null;
+  cluster_deviation_ms: number;
+  is_inlier: boolean;
+};
+
+export type OffsetClusterAnalysisResponse = {
+  pair_analyses: OffsetClusterPairAnalysis[];
+  cluster_summary: {
+    candidate_count: number;
+    median_offset_ms: number;
+    final_offset_ms?: number | null;
+    inlier_count: number;
+    inlier_ratio: number;
+    passes: boolean;
+    tolerance_ms: number;
+    min_inlier_ratio: number;
+    min_anchor_count: number;
+    reverse_consistent_count: number;
+    negative_evidence_pair_count: number;
+    reasons: string[];
+  };
 };
 
 export type SyncResult = {

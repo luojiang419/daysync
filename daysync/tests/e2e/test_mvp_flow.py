@@ -125,6 +125,24 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
     assert auto_candidates_response.status_code == 200
     assert auto_candidates_response.json()["candidates"][0]["subtitle_id"] == search_data["audio_results"][0]["subtitle_id"]
 
+    offset_cluster_response = client.post(
+        f"/api/projects/{project_id}/sync/offset-cluster",
+        json={
+            "pairs": [
+                {
+                    "video_subtitle_id": search_data["video_results"][0]["subtitle_id"],
+                    "audio_subtitle_id": search_data["audio_results"][0]["subtitle_id"],
+                }
+            ],
+            "tolerance_ms": 500,
+            "min_inlier_ratio": 0.6,
+            "min_anchor_count": 3,
+            "context_radius": 1,
+        },
+    )
+    assert offset_cluster_response.status_code == 200
+    assert offset_cluster_response.json()["cluster_summary"]["candidate_count"] == 1
+
     sync_response = client.post(
         f"/api/projects/{project_id}/sync/manual-anchor",
         json={

@@ -50,6 +50,19 @@ class AutoCandidateRequest(BaseModel):
     context_radius: int = Field(default=1, ge=0, le=3)
 
 
+class OffsetClusterPairRequest(BaseModel):
+    video_subtitle_id: str
+    audio_subtitle_id: str
+
+
+class OffsetClusterRequest(BaseModel):
+    pairs: list[OffsetClusterPairRequest]
+    tolerance_ms: int = Field(default=500, ge=0)
+    min_inlier_ratio: float = Field(default=0.6, ge=0, le=1)
+    min_anchor_count: int = Field(default=3, ge=1)
+    context_radius: int = Field(default=1, ge=0, le=3)
+
+
 class ExportCsvRequest(BaseModel):
     output_path: str
 

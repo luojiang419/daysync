@@ -4,9 +4,10 @@ import userEvent from "@testing-library/user-event";
 import { AutoCandidatePanel } from "../src/components/AutoCandidatePanel";
 
 describe("AutoCandidatePanel", () => {
-  it("显示候选评分并支持应用候选", async () => {
+  it("显示候选评分并支持应用候选和加入聚类样本", async () => {
     const user = userEvent.setup();
     const onUseCandidate = vi.fn();
+    const onAddClusterSample = vi.fn();
     render(
       <AutoCandidatePanel
         recommendation={{
@@ -27,6 +28,7 @@ describe("AutoCandidatePanel", () => {
             context_before_text: "现在开始",
             context_after_text: "继续往前走",
             context_window_text: "现在开始 | 我们到了这里 | 继续往前走",
+            duplicate_count: 1,
           },
           target_track_type: "external_audio",
           limit: 5,
@@ -49,6 +51,11 @@ describe("AutoCandidatePanel", () => {
               text_similarity: 1,
               context_similarity: 1,
               final_score: 1,
+              candidate_margin: 0.3,
+              reverse_margin: 0.25,
+              reverse_match_consistent: true,
+              reverse_top_subtitle_id: "video-1",
+              reverse_top_raw_text: "我们到了这里",
               negative_evidence_count: 0,
               duplicate_count: 1,
               context_before_text: "现在开始",
@@ -58,14 +65,20 @@ describe("AutoCandidatePanel", () => {
           ],
         }}
         onUseCandidate={onUseCandidate}
+        onAddClusterSample={onAddClusterSample}
       />,
     );
 
     expect(screen.getByText("自动推荐候选")).toBeInTheDocument();
     expect(screen.getByText(/文本相似 100%/)).toBeInTheDocument();
+    expect(screen.getByText(/正反向验证 一致/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "使用这个候选" }));
     expect(onUseCandidate).toHaveBeenCalledTimes(1);
     expect(onUseCandidate.mock.calls[0][0].subtitle_id).toBe("audio-1");
+
+    await user.click(screen.getByRole("button", { name: "加入聚类样本" }));
+    expect(onAddClusterSample).toHaveBeenCalledTimes(1);
+    expect(onAddClusterSample.mock.calls[0][0].subtitle_id).toBe("audio-1");
   });
 });

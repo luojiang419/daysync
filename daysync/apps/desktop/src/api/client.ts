@@ -2,6 +2,7 @@ import type {
   AutoCandidateResponse,
   FlatTimeline,
   MediaFile,
+  OffsetClusterAnalysisResponse,
   ProjectSnapshot,
   SearchResults,
   SyncResult,
@@ -57,6 +58,7 @@ type SyncResponse = {
 };
 
 type AutoCandidateApiResponse = AutoCandidateResponse;
+type OffsetClusterApiResponse = OffsetClusterAnalysisResponse;
 
 type SyncListResponse = {
   sync_results: SyncResult[];
@@ -184,6 +186,28 @@ export async function recommendAutoCandidates(
     body: JSON.stringify({
       anchor_subtitle_id: payload.anchor_subtitle_id,
       limit: payload.limit ?? 5,
+      context_radius: payload.context_radius ?? 1,
+    }),
+  });
+}
+
+export async function analyzeOffsetCluster(
+  projectId: string,
+  payload: {
+    pairs: Array<{ video_subtitle_id: string; audio_subtitle_id: string }>;
+    tolerance_ms?: number;
+    min_inlier_ratio?: number;
+    min_anchor_count?: number;
+    context_radius?: number;
+  },
+): Promise<OffsetClusterApiResponse> {
+  return request<OffsetClusterApiResponse>(`/api/projects/${projectId}/sync/offset-cluster`, {
+    method: "POST",
+    body: JSON.stringify({
+      pairs: payload.pairs,
+      tolerance_ms: payload.tolerance_ms ?? 500,
+      min_inlier_ratio: payload.min_inlier_ratio ?? 0.6,
+      min_anchor_count: payload.min_anchor_count ?? 3,
       context_radius: payload.context_radius ?? 1,
     }),
   });

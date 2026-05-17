@@ -3,9 +3,10 @@ import type { AutoCandidate, AutoCandidateResponse } from "../api/types";
 type Props = {
   recommendation: AutoCandidateResponse;
   onUseCandidate: (candidate: AutoCandidate) => void;
+  onAddClusterSample: (candidate: AutoCandidate) => void;
 };
 
-export function AutoCandidatePanel({ recommendation, onUseCandidate }: Props) {
+export function AutoCandidatePanel({ recommendation, onUseCandidate, onAddClusterSample }: Props) {
   return (
     <section className="auto-candidate-panel">
       <header className="result-column-header">
@@ -35,17 +36,34 @@ export function AutoCandidatePanel({ recommendation, onUseCandidate }: Props) {
                 {candidate.source_filename ?? "未映射素材"} · {candidate.source_start_ms ?? "-"} ms
               </span>
             </div>
+            <div className="candidate-meta">
+              <span>
+                正反向验证 {candidate.reverse_match_consistent ? "一致" : "不一致"} · 分差{" "}
+                {Math.round(candidate.candidate_margin * 100)} / 反向{" "}
+                {Math.round(candidate.reverse_margin * 100)}
+              </span>
+              <span>负证据 {candidate.negative_evidence_count} 个</span>
+            </div>
             <div className="candidate-context">
               <small>前文：{candidate.context_before_text || "无"}</small>
               <small>后文：{candidate.context_after_text || "无"}</small>
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => onUseCandidate(candidate)}
-            >
-              使用这个候选
-            </button>
+            <div className="button-row">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => onUseCandidate(candidate)}
+              >
+                使用这个候选
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => onAddClusterSample(candidate)}
+              >
+                加入聚类样本
+              </button>
+            </div>
           </article>
         ))}
       </div>

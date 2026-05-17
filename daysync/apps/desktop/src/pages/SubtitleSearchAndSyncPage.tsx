@@ -1,13 +1,20 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
+  analyzeOffsetCluster,
   ApiError,
   createManualSync,
   importSubtitles,
   recommendAutoCandidates,
   searchSubtitles,
 } from "../api/client";
-import type { AutoCandidate, AutoCandidateResponse } from "../api/types";
+import type {
+  AutoCandidate,
+  AutoCandidateResponse,
+  OffsetClusterAnalysisResponse,
+  OffsetClusterSample,
+  SearchResult,
+} from "../api/types";
 import { AutoCandidatePanel } from "../components/AutoCandidatePanel";
 import { chooseSubtitleFile } from "../api/tauri";
 import { SubtitleMatchBoard } from "../components/SubtitleMatchBoard";
@@ -30,12 +37,14 @@ export function SubtitleSearchAndSyncPage() {
   const [audioSrtPath, setAudioSrtPath] = useState("");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<
-    "video-import" | "audio-import" | "search" | "align" | "recommend" | null
+    "video-import" | "audio-import" | "search" | "align" | "recommend" | "cluster" | null
   >(null);
   const [recommendation, setRecommendation] = useState<AutoCandidateResponse | null>(null);
   const [recommendingFrom, setRecommendingFrom] = useState<"video_ref" | "external_audio" | null>(
     null,
   );
+  const [clusterSamples, setClusterSamples] = useState<OffsetClusterSample[]>([]);
+  const [clusterAnalysis, setClusterAnalysis] = useState<OffsetClusterAnalysisResponse | null>(null);
 
   useEffect(() => {
     if (!videoTimelineId && videoTimelines[0]) {
@@ -105,6 +114,7 @@ export function SubtitleSearchAndSyncPage() {
     try {
       const results = await searchSubtitles(state.currentProject.id, query, 20);
       setRecommendation(null);
+      setClusterAnalysis(null);
       dispatch({ type: "SET_SEARCH_RESULTS", payload: results });
       dispatch({
         type: "SET_NOTICE",
@@ -187,6 +197,123 @@ export function SubtitleSearchAndSyncPage() {
     dispatch({
       type: "SET_NOTICE",
       payload: { tone: "success", message: "候选已应用，现在可以直接点击一键对齐。" },
+    });
+  }
+
+  function handleAddCandidateClusterSample(candidate: AutoCandidate) {
+    if (!recommendation) {
+      return;
+    }
+    if (recommendation.target_track_type === "external_audio") {
+      addClusterSample({
+        video_subtitle_id: recommendation.anchor.subtitle_id,
+        video_text: recommendation.anchor.raw_text,
+        video_source_filename: recommendation.anchor.source_filename,
+        audio_subtitle_id: candidate.subtitle_id,
+        audio_text: candidate.raw_text,
+        audio_source_filename: candidate.source_filename,
+      });
+      return;
+    }
+
+    addClusterSample({
+      video_subtitle_id: candidate.subtitle_id,
+      video_text: candidate.raw_text,
+      video_source_filename: candidate.source_filename,
+      audio_subtitle_id: recommendation.anchor.subtitle_id,
+      audio_text: recommendation.anchor.raw_text,
+      audio_source_filename: recommendation.anchor.source_filename,
+    });
+  }
+
+  function handleAddCurrentSelectionSample() {
+    const videoResult = findSearchResultById(state.searchResults, state.selectedVideoSubtitleId);
+    const audioResult = findSearchResultById(state.searchResults, state.selectedAudioSubtitleId);
+    if (!videoResult || !audioResult) {
+      dispatch({
+        type: "SET_NOTICE",
+        payload: { tone: "error", message: "请先左右各选择一条字幕，再加入聚类样本。" },
+      });
+      return;
+    }
+    addClusterSample({
+      video_subtitle_id: videoResult.subtitle_id,
+      video_text: videoResult.raw_text,
+      video_source_filename: videoResult.source_filename,
+      audio_subtitle_id: audioResult.subtitle_id,
+      audio_text: audioResult.raw_text,
+      audio_source_filename: audioResult.source_filename,
+    });
+  }
+
+  async function handleAnalyzeCluster() {
+    if (!state.currentProject || !clusterSamples.length) {
+      return;
+    }
+    setBusy("cluster");
+    try {
+      const result = await analyzeOffsetCluster(state.currentProject.id, {
+        pairs: clusterSamples.map((sample) => ({
+          video_subtitle_id: sample.video_subtitle_id,
+          audio_subtitle_id: sample.audio_subtitle_id,
+        })),
+        tolerance_ms: 500,
+        min_inlier_ratio: 0.6,
+        min_anchor_count: 3,
+        context_radius: 1,
+      });
+      setClusterAnalysis(result);
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: result.cluster_summary.passes ? "success" : "neutral",
+          message: result.cluster_summary.passes
+            ? `聚类通过，建议 offset ${result.cluster_summary.final_offset_ms} ms。`
+            : `聚类完成，但当前还未满足通过条件：${result.cluster_summary.reasons.join(", ") || "无"}`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "offset 聚类分析失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function handleRemoveClusterSample(videoSubtitleId: string, audioSubtitleId: string) {
+    setClusterSamples((current) =>
+      current.filter(
+        (sample) =>
+          !(
+            sample.video_subtitle_id === videoSubtitleId &&
+            sample.audio_subtitle_id === audioSubtitleId
+          ),
+      ),
+    );
+    setClusterAnalysis(null);
+  }
+
+  function handleClearClusterSamples() {
+    setClusterSamples([]);
+    setClusterAnalysis(null);
+  }
+
+  function addClusterSample(sample: OffsetClusterSample) {
+    const sampleKey = `${sample.video_subtitle_id}:${sample.audio_subtitle_id}`;
+    setClusterSamples((current) => {
+      if (
+        current.some(
+          (item) => `${item.video_subtitle_id}:${item.audio_subtitle_id}` === sampleKey,
+        )
+      ) {
+        return current;
+      }
+      return [...current, sample];
+    });
+    setClusterAnalysis(null);
+    dispatch({
+      type: "SET_NOTICE",
+      payload: { tone: "success", message: "已加入聚类样本，可以继续累积更多锚点对。" },
     });
   }
 
@@ -355,9 +482,159 @@ export function SubtitleSearchAndSyncPage() {
         />
 
         {recommendation ? (
-          <AutoCandidatePanel recommendation={recommendation} onUseCandidate={handleUseCandidate} />
+          <AutoCandidatePanel
+            recommendation={recommendation}
+            onUseCandidate={handleUseCandidate}
+            onAddClusterSample={handleAddCandidateClusterSample}
+          />
         ) : null}
+
+        <section className="cluster-analysis-panel">
+          <header className="result-column-header">
+            <div>
+              <h3>多锚点 offset 聚类</h3>
+              <span>收集多组视频/音频字幕对后，做正反向验证与聚类分析</span>
+            </div>
+            <span>{clusterSamples.length} 组样本</span>
+          </header>
+
+          <div className="button-row">
+            <button
+              type="button"
+              className="ghost-button"
+              disabled={!state.selectedVideoSubtitleId || !state.selectedAudioSubtitleId}
+              onClick={handleAddCurrentSelectionSample}
+            >
+              将当前选择加入聚类样本
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!clusterSamples.length || busy === "cluster"}
+              onClick={handleAnalyzeCluster}
+            >
+              {busy === "cluster" ? "分析中..." : "分析 offset 聚类"}
+            </button>
+            <button
+              type="button"
+              className="ghost-button"
+              disabled={!clusterSamples.length}
+              onClick={handleClearClusterSamples}
+            >
+              清空样本
+            </button>
+          </div>
+
+          <div className="cluster-sample-list">
+            {clusterSamples.map((sample) => (
+              <article
+                key={`${sample.video_subtitle_id}:${sample.audio_subtitle_id}`}
+                className="cluster-sample-card"
+              >
+                <div>
+                  <strong>视频：</strong>
+                  {sample.video_text}
+                  <small> · {sample.video_source_filename ?? "未映射素材"}</small>
+                </div>
+                <div>
+                  <strong>音频：</strong>
+                  {sample.audio_text}
+                  <small> · {sample.audio_source_filename ?? "未映射素材"}</small>
+                </div>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() =>
+                    handleRemoveClusterSample(sample.video_subtitle_id, sample.audio_subtitle_id)
+                  }
+                >
+                  移除
+                </button>
+              </article>
+            ))}
+          </div>
+
+          {clusterAnalysis ? (
+            <div className="cluster-result-card">
+              <div className="metrics-grid">
+                <div className="metric-card">
+                  <span>中位 offset</span>
+                  <strong>{clusterAnalysis.cluster_summary.median_offset_ms}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>最终 offset</span>
+                  <strong>
+                    {clusterAnalysis.cluster_summary.final_offset_ms ?? "未通过"}
+                  </strong>
+                </div>
+                <div className="metric-card">
+                  <span>inlier ratio</span>
+                  <strong>{Math.round(clusterAnalysis.cluster_summary.inlier_ratio * 100)}%</strong>
+                </div>
+              </div>
+
+              <div className="candidate-context">
+                <small>
+                  通过：{clusterAnalysis.cluster_summary.passes ? "是" : "否"} · reverse 一致{" "}
+                  {clusterAnalysis.cluster_summary.reverse_consistent_count}/
+                  {clusterAnalysis.cluster_summary.candidate_count}
+                </small>
+                <small>
+                  原因：{clusterAnalysis.cluster_summary.reasons.join(", ") || "无"}
+                </small>
+              </div>
+
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>视频字幕</th>
+                      <th>音频字幕</th>
+                      <th>offset</th>
+                      <th>文本/上下文</th>
+                      <th>正反向</th>
+                      <th>deviation</th>
+                      <th>inlier</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clusterAnalysis.pair_analyses.map((analysis) => (
+                      <tr
+                        key={`${analysis.video_subtitle_id}:${analysis.audio_subtitle_id}`}
+                      >
+                        <td>{analysis.video_text}</td>
+                        <td>{analysis.audio_text}</td>
+                        <td>{analysis.offset_ms}</td>
+                        <td>
+                          {Math.round(analysis.text_similarity * 100)}% /{" "}
+                          {Math.round(analysis.context_similarity * 100)}%
+                        </td>
+                        <td>
+                          {analysis.reverse_match_consistent ? "一致" : "不一致"} · 分差{" "}
+                          {Math.round(analysis.candidate_margin * 100)}
+                        </td>
+                        <td>{analysis.cluster_deviation_ms}</td>
+                        <td>{analysis.is_inlier ? "是" : "否"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+        </section>
       </article>
     </section>
   );
+}
+
+function findSearchResultById(
+  searchResults: { video_results: SearchResult[]; audio_results: SearchResult[] } | null,
+  subtitleId: string | null,
+): SearchResult | null {
+  if (!searchResults || !subtitleId) {
+    return null;
+  }
+  const allResults = [...searchResults.video_results, ...searchResults.audio_results];
+  return allResults.find((item) => item.subtitle_id === subtitleId) ?? null;
 }
