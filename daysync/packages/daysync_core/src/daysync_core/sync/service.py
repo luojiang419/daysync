@@ -8,6 +8,8 @@ from statistics import median
 from daysync_core.errors import DaySyncError
 from daysync_core.utils import new_uuid, utc_now_iso
 
+AUTO_PASS_MIN_CANDIDATE_MARGIN = 0.1
+
 
 def create_manual_anchor_sync(
     connection: sqlite3.Connection,
@@ -242,6 +244,12 @@ def create_cluster_sync_candidate(
         "pair_analyses": pair_analyses,
         "note": note,
     }
+    auto_accept_decision = _evaluate_auto_accept(
+        cluster_summary=cluster_summary,
+        relevant_pairs=relevant_pairs,
+        average_candidate_margin=candidate_margin,
+    )
+    confidence_breakdown["auto_accept_decision"] = auto_accept_decision
 
     sync_result = {
         "id": new_uuid(),
@@ -256,7 +264,7 @@ def create_cluster_sync_candidate(
         "offset_ms": proposed_offset_ms,
         "drift_ppm": None,
         "confidence_score": round(final_score, 4),
-        "status": "needs_review",
+        "status": "accepted_auto" if auto_accept_decision["eligible"] else "needs_review",
         "source": "auto_text",
         "video_anchor_subtitle_id": representative_pair["video_subtitle_id"],
         "audio_anchor_subtitle_id": representative_pair["audio_subtitle_id"],
@@ -282,6 +290,7 @@ def create_cluster_sync_candidate(
     return {
         "sync_result": sync_result,
         "cluster_summary": cluster_summary,
+        "auto_accept_decision": auto_accept_decision,
     }
 
 
@@ -493,6 +502,19 @@ def analyze_offset_cluster(
     if any(analysis["negative_evidence_count"] > 0 for analysis in pair_analyses):
         reasons.append("negative_evidence_present")
 
+    relevant_pairs = [pair for pair in pair_analyses if pair["is_inlier"]]
+    if not relevant_pairs:
+        relevant_pairs = pair_analyses
+    auto_accept_decision = _evaluate_auto_accept(
+        cluster_summary={
+            "passes": passes,
+            "inlier_count": inlier_count,
+            "min_anchor_count": min_anchor_count,
+        },
+        relevant_pairs=relevant_pairs,
+        average_candidate_margin=_average_metric(relevant_pairs, "candidate_margin"),
+    )
+
     return {
         "pair_analyses": pair_analyses,
         "cluster_summary": {
@@ -513,6 +535,7 @@ def analyze_offset_cluster(
             ),
             "reasons": reasons,
         },
+        "auto_accept_decision": auto_accept_decision,
     }
 
 
@@ -823,6 +846,32 @@ def _average_metric(items: list[dict[str, object]], key: str) -> float:
     if not items:
         return 0.0
     return sum(float(item[key]) for item in items) / len(items)
+
+
+def _evaluate_auto_accept(
+    *,
+    cluster_summary: dict[str, object],
+    relevant_pairs: list[dict[str, object]],
+    average_candidate_margin: float,
+) -> dict[str, object]:
+    reasons: list[str] = []
+    if not bool(cluster_summary["passes"]):
+        reasons.append("cluster_not_stable_enough")
+    if int(cluster_summary["inlier_count"]) < int(cluster_summary["min_anchor_count"]):
+        reasons.append("not_enough_inlier_anchors")
+    if any(not pair["reverse_match_consistent"] for pair in relevant_pairs):
+        reasons.append("reverse_match_not_consistent")
+    if average_candidate_margin < AUTO_PASS_MIN_CANDIDATE_MARGIN:
+        reasons.append("candidate_margin_too_small")
+    if any(pair["negative_evidence_count"] > 0 for pair in relevant_pairs):
+        reasons.append("negative_evidence_present")
+
+    return {
+        "eligible": not reasons,
+        "reasons": reasons,
+        "average_candidate_margin": round(average_candidate_margin, 4),
+        "min_candidate_margin": AUTO_PASS_MIN_CANDIDATE_MARGIN,
+    }
 
 
 def _parse_json(value: str | None) -> dict[str, object]:

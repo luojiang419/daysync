@@ -308,7 +308,10 @@ export function SubtitleSearchAndSyncPage() {
         type: "SET_NOTICE",
         payload: {
           tone: "success",
-          message: `候选已保存到复核队列，当前状态 ${result.sync_result.status}，建议 offset ${result.sync_result.offset_ms} ms。`,
+          message:
+            result.sync_result.status === "accepted_auto"
+              ? `候选已自动通过，offset ${result.sync_result.offset_ms} ms，并已进入最终结果。`
+              : `候选已保存到复核队列，当前状态 ${result.sync_result.status}，建议 offset ${result.sync_result.offset_ms} ms。`,
         },
       });
     } catch (error) {
@@ -560,7 +563,7 @@ export function SubtitleSearchAndSyncPage() {
               disabled={!clusterSamples.length || busy === "queue"}
               onClick={handleSaveClusterCandidate}
             >
-              {busy === "queue" ? "保存中..." : "保存到复核队列"}
+              {busy === "queue" ? "生成中..." : "生成同步候选"}
             </button>
             <button
               type="button"
@@ -628,6 +631,12 @@ export function SubtitleSearchAndSyncPage() {
                 </small>
                 <small>
                   原因：{clusterAnalysis.cluster_summary.reasons.join(", ") || "无"}
+                </small>
+                <small>
+                  自动通过预判：
+                  {clusterAnalysis.auto_accept_decision.eligible
+                    ? " 可自动通过"
+                    : ` 需复核 (${clusterAnalysis.auto_accept_decision.reasons.join(", ") || "无"})`}
                 </small>
               </div>
 

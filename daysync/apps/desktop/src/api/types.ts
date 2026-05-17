@@ -170,6 +170,14 @@ export type OffsetClusterAnalysisResponse = {
     negative_evidence_pair_count: number;
     reasons: string[];
   };
+  auto_accept_decision: AutoAcceptDecision;
+};
+
+export type AutoAcceptDecision = {
+  eligible: boolean;
+  reasons: string[];
+  average_candidate_margin: number;
+  min_candidate_margin: number;
 };
 
 export type ReviewEvent = {
@@ -213,6 +221,7 @@ export type SyncResult = {
   status: string;
   source: string;
   confidence_score: number;
+  project_id?: string;
   video_file?: string;
   audio_file?: string;
   video_anchor_text?: string;

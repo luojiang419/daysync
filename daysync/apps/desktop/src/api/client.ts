@@ -1,4 +1,5 @@
 import type {
+  AutoAcceptDecision,
   AutoCandidateResponse,
   FlatTimeline,
   MediaFile,
@@ -69,6 +70,7 @@ type ClusterCandidateResponse = {
     source: string;
   };
   cluster_summary: OffsetClusterAnalysisResponse["cluster_summary"];
+  auto_accept_decision: AutoAcceptDecision;
 };
 type ReviewSyncResultResponse = {
   sync_result: ReviewQueueItem;

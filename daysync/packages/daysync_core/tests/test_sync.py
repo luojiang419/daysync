@@ -190,12 +190,12 @@ def test_analyze_offset_cluster_fails_when_not_enough_pairs(
     assert "not_enough_anchor_pairs" in result["cluster_summary"]["reasons"]
 
 
-def test_create_cluster_sync_candidate_and_list_review_queue(
+def test_create_cluster_sync_candidate_auto_accepts_when_gate_passes(
     project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
 ) -> None:
     project, connection = project_workspace
     pair_ids = _prepare_cluster_fixture(project, connection, tmp_path, sample_root)
-    create_cluster_sync_candidate(
+    result = create_cluster_sync_candidate(
         connection,
         project["id"],
         pairs=[
@@ -214,10 +214,35 @@ def test_create_cluster_sync_candidate_and_list_review_queue(
         ],
     )
 
+    assert result["sync_result"]["status"] == "accepted_auto"
+    assert result["auto_accept_decision"]["eligible"] is True
+    queue = list_review_queue(connection, project["id"])
+    assert queue == []
+
+
+def test_create_cluster_sync_candidate_goes_to_review_queue_when_gate_fails(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    pair_ids = _prepare_cluster_fixture(project, connection, tmp_path, sample_root)
+    result = create_cluster_sync_candidate(
+        connection,
+        project["id"],
+        pairs=[
+            {
+                "video_subtitle_id": pair_ids["video_1"],
+                "audio_subtitle_id": pair_ids["audio_good_1"],
+            }
+        ],
+    )
+
+    assert result["sync_result"]["status"] == "needs_review"
+    assert result["auto_accept_decision"]["eligible"] is False
+    assert "cluster_not_stable_enough" in result["auto_accept_decision"]["reasons"]
     queue = list_review_queue(connection, project["id"])
     assert len(queue) == 1
     assert queue[0]["status"] == "needs_review"
-    assert queue[0]["confidence_breakdown"]["cluster_summary"]["passes"] is True
+    assert queue[0]["confidence_breakdown"]["cluster_summary"]["passes"] is False
 
 
 def test_review_sync_result_accept_adjust_and_reject(
@@ -232,14 +257,6 @@ def test_review_sync_result_accept_adjust_and_reject(
             {
                 "video_subtitle_id": pair_ids["video_1"],
                 "audio_subtitle_id": pair_ids["audio_good_1"],
-            },
-            {
-                "video_subtitle_id": pair_ids["video_2"],
-                "audio_subtitle_id": pair_ids["audio_good_2"],
-            },
-            {
-                "video_subtitle_id": pair_ids["video_3"],
-                "audio_subtitle_id": pair_ids["audio_good_3"],
             },
         ],
     )
