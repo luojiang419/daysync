@@ -18,14 +18,12 @@ vi.mock("../src/api/client", async () => {
     ...actual,
     createProject: vi.fn(),
     openProject: vi.fn(),
-    checkHealth: vi.fn(),
-    waitForApiReady: vi.fn(),
+    ensureLocalApiReady: vi.fn(),
   };
 });
 
 vi.mock("../src/api/tauri", () => ({
   chooseDirectory: vi.fn().mockResolvedValue(null),
-  ensureDevApi: vi.fn().mockResolvedValue(false),
 }));
 
 describe("ProjectHomePage", () => {

@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import { createHashRouter, RouterProvider } from "react-router-dom";
 
-import { checkHealth, openProject } from "./api/client";
-import { ensureDevApi } from "./api/tauri";
+import { ensureLocalApiReady, openProject } from "./api/client";
 import { AppShell } from "./components/AppShell";
 import { ExportPage } from "./pages/ExportPage";
 import { FlatTimelinePage } from "./pages/FlatTimelinePage";
@@ -39,14 +38,7 @@ function App() {
       });
 
       try {
-        await ensureDevApi();
-      } catch {
-        // 开发模式下没有 Tauri runtime 时忽略自动拉起。
-      }
-
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        try {
-          const health = await checkHealth();
+          const health = await ensureLocalApiReady({ attempts: 20, delayMs: 500 });
           if (cancelled) {
             return;
           }
@@ -81,9 +73,8 @@ function App() {
             },
           });
           return;
-        } catch {
-          await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 300 : 700));
-        }
+      } catch {
+        // 交由统一错误提示兜底。
       }
 
       if (!cancelled) {

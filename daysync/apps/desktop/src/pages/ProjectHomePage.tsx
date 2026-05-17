@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from "react";
 
-import { ApiError, checkHealth, createProject, openProject, waitForApiReady } from "../api/client";
-import { chooseDirectory, ensureDevApi } from "../api/tauri";
+import { ApiError, createProject, ensureLocalApiReady, openProject } from "../api/client";
+import { chooseDirectory } from "../api/tauri";
 import { loadLastProjectRoot, saveLastProjectRoot } from "../project-persistence";
 import { useAppState } from "../state/AppState";
 
@@ -18,25 +18,7 @@ export function ProjectHomePage() {
 
   async function ensureApiConnection(): Promise<boolean> {
     try {
-      const initialHealth = await checkHealth();
-      dispatch({
-        type: "SET_HEALTH",
-        payload: {
-          state: initialHealth.ffmpeg.ready ? "ready" : "error",
-          message: `API 已连接，本会话登记 ${initialHealth.registered_projects} 个项目，FFmpeg ${initialHealth.ffmpeg.version ?? "unknown"} · ${initialHealth.ffmpeg.source ?? "unknown"}`,
-        },
-      });
-      return true;
-    } catch {
-      try {
-        await ensureDevApi();
-      } catch {
-        // 非 Tauri 环境或本地运行时不可自动拉起时，继续等待。
-      }
-    }
-
-    try {
-      const health = await waitForApiReady({ attempts: 12, delayMs: 500 });
+      const health = await ensureLocalApiReady({ attempts: 20, delayMs: 500 });
       dispatch({
         type: "SET_HEALTH",
         payload: {

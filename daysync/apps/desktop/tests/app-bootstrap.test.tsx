@@ -7,7 +7,7 @@ vi.mock("../src/api/client", async () => {
   const actual = await vi.importActual<typeof import("../src/api/client")>("../src/api/client");
   return {
     ...actual,
-    checkHealth: vi.fn().mockResolvedValue({
+    ensureLocalApiReady: vi.fn().mockResolvedValue({
       status: "ok",
       registered_projects: 1,
       ffmpeg: {
@@ -55,7 +55,6 @@ vi.mock("../src/api/client", async () => {
 });
 
 vi.mock("../src/api/tauri", () => ({
-  ensureDevApi: vi.fn().mockResolvedValue(false),
   chooseDirectory: vi.fn().mockResolvedValue(null),
   chooseFiles: vi.fn().mockResolvedValue([]),
   chooseSubtitleFile: vi.fn().mockResolvedValue(null),

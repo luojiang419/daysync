@@ -1,8 +1,14 @@
-import { ApiError, checkHealth, waitForApiReady } from "../src/api/client";
+import { ApiError, checkHealth, ensureLocalApiReady, waitForApiReady } from "../src/api/client";
+
+vi.mock("../src/api/tauri", () => ({
+  ensureDevApi: vi.fn().mockResolvedValue(true),
+  isTauriRuntime: vi.fn().mockReturnValue(true),
+}));
 
 describe("api client", () => {
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
   });
 
   it("返回健康检查数据", async () => {
@@ -57,6 +63,8 @@ describe("api client", () => {
   });
 
   it("把网络失败包装成明确的 ApiError", async () => {
+    const tauriApi = await import("../src/api/tauri");
+    vi.mocked(tauriApi.ensureDevApi).mockRejectedValueOnce(new Error("spawn failed"));
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
 
     await expect(checkHealth()).rejects.toMatchObject({
@@ -93,5 +101,105 @@ describe("api client", () => {
     const result = await waitForApiReady({ attempts: 2, delayMs: 0 });
 
     expect(result.status).toBe("ok");
+  });
+
+  it("桌面版请求失败时会自动拉起本地 API 后重试", async () => {
+    const tauriApi = await import("../src/api/tauri");
+    vi.mocked(tauriApi.ensureDevApi).mockResolvedValueOnce(true);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              status: "ok",
+              registered_projects: 1,
+              ffmpeg: {
+                ready: true,
+                source: "project-local",
+                version: "8.1.1",
+                root_path: "D:\\ffmpeg",
+                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
+                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
+                error: null,
+              },
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              status: "ok",
+              registered_projects: 1,
+              ffmpeg: {
+                ready: true,
+                source: "project-local",
+                version: "8.1.1",
+                root_path: "D:\\ffmpeg",
+                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
+                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
+                error: null,
+              },
+            }),
+        }),
+    );
+
+    const result = await checkHealth();
+
+    expect(result.status).toBe("ok");
+    expect(tauriApi.ensureDevApi).toHaveBeenCalled();
+  });
+
+  it("ensureLocalApiReady 会在桌面版自动等待 API 就绪", async () => {
+    const tauriApi = await import("../src/api/tauri");
+    vi.mocked(tauriApi.ensureDevApi).mockResolvedValueOnce(true);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              status: "ok",
+              registered_projects: 3,
+              ffmpeg: {
+                ready: true,
+                source: "project-local",
+                version: "8.1.1",
+                root_path: "D:\\ffmpeg",
+                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
+                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
+                error: null,
+              },
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              status: "ok",
+              registered_projects: 3,
+              ffmpeg: {
+                ready: true,
+                source: "project-local",
+                version: "8.1.1",
+                root_path: "D:\\ffmpeg",
+                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
+                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
+                error: null,
+              },
+            }),
+        }),
+    );
+
+    const result = await ensureLocalApiReady({ attempts: 2, delayMs: 0 });
+
+    expect(result.registered_projects).toBe(3);
+    expect(tauriApi.ensureDevApi).toHaveBeenCalled();
   });
 });

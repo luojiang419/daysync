@@ -11,6 +11,7 @@ import type {
   StudioTimelineSnapshot,
   SyncResult,
 } from "./types";
+import { ensureDevApi, isTauriRuntime } from "./tauri";
 
 const API_BASE_URL =
   import.meta.env.VITE_DAYSYNC_API_URL ?? "http://127.0.0.1:17831";
@@ -123,22 +124,31 @@ type ExportJobListResponse = {
   items: ExportJob[];
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+type RequestOptions = {
+  allowRecovery?: boolean;
+};
+
+const API_RECOVERY_ATTEMPTS = 20;
+const API_RECOVERY_DELAY_MS = 500;
+
+let apiRecoveryPromise: Promise<boolean> | null = null;
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
-      ...init,
-    });
+    response = await performFetch(path, init);
   } catch (error) {
-    throw new ApiError(
-      "API_UNREACHABLE",
-      "未连接到本地 API，请稍后重试；如果是桌面版，请等待本地运行时完成启动。",
-      { cause: error instanceof Error ? error.message : String(error) },
-    );
+    const recovered =
+      options.allowRecovery !== false && (await startOrRefreshLocalApi());
+    if (!recovered) {
+      throw buildApiUnreachableError(error);
+    }
+
+    try {
+      response = await performFetch(path, init);
+    } catch (retryError) {
+      throw buildApiUnreachableError(retryError);
+    }
   }
 
   const payloadText = await response.text();
@@ -160,20 +170,21 @@ export function getApiBaseUrl(): string {
   return API_BASE_URL;
 }
 
-export async function checkHealth(): Promise<HealthResponse> {
-  return request<HealthResponse>("/api/health");
+export async function checkHealth(options: RequestOptions = {}): Promise<HealthResponse> {
+  return request<HealthResponse>("/api/health", undefined, options);
 }
 
 export async function waitForApiReady(
-  options: { attempts?: number; delayMs?: number } = {},
+  options: { attempts?: number; delayMs?: number; allowRecovery?: boolean } = {},
 ): Promise<HealthResponse> {
   const attempts = options.attempts ?? 8;
   const delayMs = options.delayMs ?? 500;
+  const allowRecovery = options.allowRecovery ?? false;
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await checkHealth();
+      return await checkHealth({ allowRecovery });
     } catch (error) {
       lastError = error;
       if (attempt < attempts - 1) {
@@ -186,6 +197,68 @@ export async function waitForApiReady(
     throw lastError;
   }
   throw new ApiError("API_UNREACHABLE", "未连接到本地 API。");
+}
+
+export async function ensureLocalApiReady(
+  options: { attempts?: number; delayMs?: number } = {},
+): Promise<HealthResponse> {
+  try {
+    return await checkHealth({ allowRecovery: false });
+  } catch {
+    const recovered = await startOrRefreshLocalApi(
+      options.attempts ?? API_RECOVERY_ATTEMPTS,
+      options.delayMs ?? API_RECOVERY_DELAY_MS,
+    );
+    if (!recovered) {
+      throw new ApiError(
+        "API_UNREACHABLE",
+        "未连接到本地 API，请稍后重试；如果是桌面版，请等待本地运行时完成启动。",
+      );
+    }
+    return checkHealth({ allowRecovery: false });
+  }
+}
+
+async function performFetch(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${API_BASE_URL}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    ...init,
+  });
+}
+
+function buildApiUnreachableError(error: unknown): ApiError {
+  return new ApiError(
+    "API_UNREACHABLE",
+    "未连接到本地 API，请稍后重试；如果是桌面版，请等待本地运行时完成启动。",
+    { cause: error instanceof Error ? error.message : String(error) },
+  );
+}
+
+async function startOrRefreshLocalApi(
+  attempts = API_RECOVERY_ATTEMPTS,
+  delayMs = API_RECOVERY_DELAY_MS,
+): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return false;
+  }
+  if (apiRecoveryPromise) {
+    return apiRecoveryPromise;
+  }
+  apiRecoveryPromise = (async () => {
+    try {
+      await ensureDevApi();
+      await waitForApiReady({ attempts, delayMs, allowRecovery: false });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      apiRecoveryPromise = null;
+    }
+  })();
+  return apiRecoveryPromise;
 }
 
 export async function createProject(payload: {
