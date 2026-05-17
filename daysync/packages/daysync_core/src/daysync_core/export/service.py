@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import sqlite3
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -172,6 +173,47 @@ def export_sync_report_otio(connection: sqlite3.Connection, project_id: str, out
     return {"output_path": str(target), "item_count": len(rows)}
 
 
+def export_sync_report_fcpxml(connection: sqlite3.Connection, project_id: str, output_path: str) -> dict[str, object]:
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    export_job_id = new_uuid()
+    created_at = utc_now_iso()
+    connection.execute(
+        """
+        INSERT INTO export_jobs (id, project_id, export_type, output_path, status, created_at)
+        VALUES (?, ?, 'fcpxml', ?, 'running', ?)
+        """,
+        (export_job_id, project_id, str(target), created_at),
+    )
+    rows = _load_rich_sync_export_rows(connection, project_id)
+
+    try:
+        fcpxml_content = _build_fcpxml(connection, project_id, rows)
+        target.write_text(fcpxml_content, encoding="utf-8")
+    except OSError as exc:
+        connection.execute(
+            """
+            UPDATE export_jobs
+            SET status = 'failed', error_message = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (str(exc), utc_now_iso(), export_job_id),
+        )
+        connection.commit()
+        raise DaySyncError("EXPORT_FAILED", f"Failed to export FCPXML: {exc}") from exc
+
+    connection.execute(
+        """
+        UPDATE export_jobs
+        SET status = 'succeeded', row_count = ?, completed_at = ?
+        WHERE id = ?
+        """,
+        (len(rows), utc_now_iso(), export_job_id),
+    )
+    connection.commit()
+    return {"output_path": str(target), "project_count": len(rows)}
+
+
 def export_sync_report_fcp7_xml(
     connection: sqlite3.Connection, project_id: str, output_path: str
 ) -> dict[str, object]:
@@ -242,7 +284,9 @@ def _load_rich_sync_export_rows(connection: sqlite3.Connection, project_id: str)
                sr.video_media_file_id, sr.audio_media_file_id,
                sr.video_in_ms, sr.video_out_ms, sr.audio_in_ms, sr.audio_out_ms, sr.offset_ms,
                vm.filename AS video_file, vm.original_path AS video_path, vm.duration_ms AS video_duration_ms,
+               vm.has_video AS video_has_video, vm.has_audio AS video_has_audio,
                am.filename AS audio_file, am.original_path AS audio_path, am.duration_ms AS audio_duration_ms,
+               am.has_video AS audio_has_video, am.has_audio AS audio_has_audio,
                vs.raw_text AS video_anchor_text, aus.raw_text AS audio_anchor_text, sr.created_at
         FROM sync_results sr
         JOIN media_files vm ON vm.id = sr.video_media_file_id
@@ -255,6 +299,167 @@ def _load_rich_sync_export_rows(connection: sqlite3.Connection, project_id: str)
         """,
         (project_id,),
     ).fetchall()
+
+
+def _build_fcpxml(connection: sqlite3.Connection, project_id: str, rows: list[sqlite3.Row]) -> str:
+    root = ET.Element("fcpxml", version="1.10")
+    resources = ET.SubElement(root, "resources")
+    audio_format_id = "r_audio_format"
+    ET.SubElement(resources, "format", id=audio_format_id, name="FFFrameRateUndefined")
+    event = ET.SubElement(root, "event", name=f"DaySync Export {project_id}")
+
+    for index, row in enumerate(rows, start=1):
+        video_format_id = f"r_video_format_{index}"
+        video_asset_id = f"r_video_asset_{index}"
+        audio_asset_id = f"r_audio_asset_{index}"
+        rate_num, rate_den = _load_video_rate_info(connection, row["video_media_file_id"])
+        video_stream = _load_video_stream(connection, row["video_media_file_id"])
+        video_audio_stream = _load_audio_stream(connection, row["video_media_file_id"])
+        audio_stream = _load_audio_stream(connection, row["audio_media_file_id"])
+        frame_rate = rate_num / rate_den if rate_den else 25.0
+
+        format_attrs = {
+            "id": video_format_id,
+            "frameDuration": _rate_to_fcpx_time(rate_num, rate_den),
+            "width": str(video_stream.get("width", 1920)),
+            "height": str(video_stream.get("height", 1080)),
+            "fieldOrder": "progressive",
+        }
+        predefined_name = _guess_fcpx_format_name(
+            int(video_stream.get("width", 1920)),
+            int(video_stream.get("height", 1080)),
+            rate_num,
+            rate_den,
+        )
+        if predefined_name:
+            format_attrs["name"] = predefined_name
+        ET.SubElement(resources, "format", **format_attrs)
+
+        video_asset = ET.SubElement(
+            resources,
+            "asset",
+            id=video_asset_id,
+            name=row["video_file"],
+            start="0s",
+            duration=_ms_to_fcpx_time(row["video_duration_ms"]),
+            hasVideo="1" if row["video_has_video"] else "0",
+            hasAudio="1" if row["video_has_audio"] else "0",
+            format=video_format_id,
+            audioSources="1",
+            audioChannels=str(video_audio_stream.get("channels", 2)),
+            audioRate=str(video_audio_stream.get("sample_rate", 48000)),
+        )
+        ET.SubElement(video_asset, "media-rep", kind="original-media", src=Path(row["video_path"]).as_uri())
+
+        audio_asset = ET.SubElement(
+            resources,
+            "asset",
+            id=audio_asset_id,
+            name=row["audio_file"],
+            start="0s",
+            duration=_ms_to_fcpx_time(row["audio_duration_ms"]),
+            hasVideo="1" if row["audio_has_video"] else "0",
+            hasAudio="1" if row["audio_has_audio"] else "0",
+            format=audio_format_id,
+            audioSources="1",
+            audioChannels=str(audio_stream.get("channels", 2)),
+            audioRate=str(audio_stream.get("sample_rate", 48000)),
+        )
+        ET.SubElement(audio_asset, "media-rep", kind="original-media", src=Path(row["audio_path"]).as_uri())
+
+        project = ET.SubElement(
+            event,
+            "project",
+            name=f"{row['video_file']}__{row['audio_file']}",
+            id=f"project_{index}",
+        )
+        sequence_layout = _build_sequence_layout_ms(row)
+        sequence = ET.SubElement(
+            project,
+            "sequence",
+            format=video_format_id,
+            duration=_ms_to_fcpx_time(sequence_layout["sequence_duration_ms"]),
+            tcStart="0s",
+            tcFormat="NDF",
+        )
+        spine = ET.SubElement(sequence, "spine")
+        primary_kind = "video" if sequence_layout["video_timeline_start_ms"] <= sequence_layout["audio_timeline_start_ms"] else "audio"
+        _append_fcpxml_sync_pair(
+            spine=spine,
+            row=row,
+            primary_kind=primary_kind,
+            video_asset_id=video_asset_id,
+            audio_asset_id=audio_asset_id,
+            sequence_layout=sequence_layout,
+            video_role="video",
+            audio_role="dialogue",
+        )
+
+    xml_body = ET.tostring(root, encoding="unicode")
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n{xml_body}\n'
+
+
+def _append_fcpxml_sync_pair(
+    *,
+    spine: ET.Element,
+    row: sqlite3.Row,
+    primary_kind: str,
+    video_asset_id: str,
+    audio_asset_id: str,
+    sequence_layout: dict[str, int],
+    video_role: str,
+    audio_role: str,
+) -> None:
+    video_duration_ms = row["video_out_ms"] - row["video_in_ms"]
+    audio_duration_ms = row["audio_out_ms"] - row["audio_in_ms"]
+    if primary_kind == "video":
+        primary = ET.SubElement(
+            spine,
+            "asset-clip",
+            name=row["video_file"],
+            ref=video_asset_id,
+            offset="0s",
+            start=_ms_to_fcpx_time(row["video_in_ms"]),
+            duration=_ms_to_fcpx_time(video_duration_ms),
+            srcEnable="video",
+            videoRole=video_role,
+        )
+        ET.SubElement(
+            primary,
+            "asset-clip",
+            name=row["audio_file"],
+            ref=audio_asset_id,
+            lane="-1",
+            offset=_ms_to_fcpx_time(sequence_layout["audio_timeline_start_ms"]),
+            start=_ms_to_fcpx_time(row["audio_in_ms"]),
+            duration=_ms_to_fcpx_time(audio_duration_ms),
+            srcEnable="audio",
+            audioRole=audio_role,
+        )
+    else:
+        primary = ET.SubElement(
+            spine,
+            "asset-clip",
+            name=row["audio_file"],
+            ref=audio_asset_id,
+            offset="0s",
+            start=_ms_to_fcpx_time(row["audio_in_ms"]),
+            duration=_ms_to_fcpx_time(audio_duration_ms),
+            srcEnable="audio",
+            audioRole=audio_role,
+        )
+        ET.SubElement(
+            primary,
+            "asset-clip",
+            name=row["video_file"],
+            ref=video_asset_id,
+            lane="1",
+            offset=_ms_to_fcpx_time(sequence_layout["video_timeline_start_ms"]),
+            start=_ms_to_fcpx_time(row["video_in_ms"]),
+            duration=_ms_to_fcpx_time(video_duration_ms),
+            srcEnable="video",
+            videoRole=video_role,
+        )
 
 
 def _build_otio_timeline(
@@ -570,6 +775,50 @@ def _load_master_rate(connection: sqlite3.Connection, rows: list[sqlite3.Row]) -
     return _load_video_rate(connection, rows[0]["video_media_file_id"])
 
 
+def _ms_to_fcpx_time(value_ms: int | float) -> str:
+    numerator = int(round(float(value_ms)))
+    denominator = 1000
+    if numerator == 0:
+        return "0s"
+    gcd_value = math.gcd(abs(numerator), denominator)
+    reduced_numerator = numerator // gcd_value
+    reduced_denominator = denominator // gcd_value
+    if reduced_denominator == 1:
+        return f"{reduced_numerator}s"
+    return f"{reduced_numerator}/{reduced_denominator}s"
+
+
+def _rate_to_fcpx_time(rate_num: int, rate_den: int) -> str:
+    if rate_num <= 0 or rate_den <= 0:
+        return "1/25s"
+    return f"{rate_den}/{rate_num}s"
+
+
+def _guess_fcpx_format_name(width: int, height: int, rate_num: int, rate_den: int) -> str | None:
+    if height != 1080:
+        return None
+    rounded_rate = round(rate_num / rate_den, 3) if rate_den else 25.0
+    if abs(rounded_rate - 23.976) < 0.01:
+        suffix = "2398"
+    elif abs(rounded_rate - 24.0) < 0.01:
+        suffix = "24"
+    elif abs(rounded_rate - 25.0) < 0.01:
+        suffix = "25"
+    elif abs(rounded_rate - 29.97) < 0.01:
+        suffix = "2997"
+    elif abs(rounded_rate - 30.0) < 0.01:
+        suffix = "30"
+    elif abs(rounded_rate - 50.0) < 0.01:
+        suffix = "50"
+    elif abs(rounded_rate - 59.94) < 0.01:
+        suffix = "5994"
+    elif abs(rounded_rate - 60.0) < 0.01:
+        suffix = "60"
+    else:
+        return None
+    return f"FFVideoFormat1080p{suffix}"
+
+
 def _append_file_reference(
     clipitem: ET.Element,
     *,
@@ -620,6 +869,11 @@ def _append_text(parent: ET.Element, tag: str, value: str) -> ET.Element:
 
 
 def _load_video_rate(connection: sqlite3.Connection, media_file_id: str) -> float:
+    numerator, denominator = _load_video_rate_info(connection, media_file_id)
+    return numerator / denominator
+
+
+def _load_video_rate_info(connection: sqlite3.Connection, media_file_id: str) -> tuple[int, int]:
     row = connection.execute(
         """
         SELECT frame_rate_num, frame_rate_den
@@ -631,8 +885,8 @@ def _load_video_rate(connection: sqlite3.Connection, media_file_id: str) -> floa
         (media_file_id,),
     ).fetchone()
     if row is None or not row["frame_rate_num"] or not row["frame_rate_den"]:
-        return 25.0
-    return row["frame_rate_num"] / row["frame_rate_den"]
+        return 25, 1
+    return int(row["frame_rate_num"]), int(row["frame_rate_den"])
 
 
 def _load_video_stream(connection: sqlite3.Connection, media_file_id: str) -> dict[str, int]:
@@ -652,7 +906,7 @@ def _load_video_stream(connection: sqlite3.Connection, media_file_id: str) -> di
 def _load_audio_stream(connection: sqlite3.Connection, media_file_id: str) -> dict[str, int]:
     row = connection.execute(
         """
-        SELECT sample_rate
+        SELECT sample_rate, channels
         FROM media_streams
         WHERE media_file_id = ? AND stream_type = 'audio'
         ORDER BY stream_index
@@ -660,7 +914,7 @@ def _load_audio_stream(connection: sqlite3.Connection, media_file_id: str) -> di
         """,
         (media_file_id,),
     ).fetchone()
-    return dict(row) if row is not None else {"sample_rate": 48000}
+    return dict(row) if row is not None else {"sample_rate": 48000, "channels": 2}
 
 
 def _ms_to_frames(value_ms: int | float, rate: float) -> int:

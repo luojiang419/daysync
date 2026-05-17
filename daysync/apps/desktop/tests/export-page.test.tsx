@@ -48,6 +48,7 @@ vi.mock("../src/api/client", async () => {
   return {
     ...actual,
     exportCsv: vi.fn(),
+    exportFcpxml: vi.fn(),
     exportFcp7Xml: vi.fn(),
     exportJson: vi.fn(),
     exportOtio: vi.fn(),
@@ -140,6 +141,29 @@ describe("ExportPage", () => {
       expect(apiClient.exportOtio).toHaveBeenCalledWith(
         "project-1",
         "D:\\projects\\demo\\exports\\sync_report.otio",
+      );
+    });
+  });
+
+  it("点击导出 FCPXML 时写入默认 fcpxml 路径", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.listReviewQueue).mockResolvedValue({ items: [] });
+    vi.mocked(apiClient.listSyncResults).mockResolvedValue({ sync_results: [] });
+    vi.mocked(apiClient.listExportJobs).mockResolvedValue({ items: [] });
+    vi.mocked(apiClient.exportFcpxml).mockResolvedValue({
+      output_path: "D:\\projects\\demo\\exports\\sync_report.fcpxml",
+      project_count: 0,
+    });
+
+    render(<ExportPage />);
+
+    await screen.findByText("导出 FCPXML");
+    await user.click(screen.getByRole("button", { name: "导出 FCPXML" }));
+
+    await waitFor(() => {
+      expect(apiClient.exportFcpxml).toHaveBeenCalledWith(
+        "project-1",
+        "D:\\projects\\demo\\exports\\sync_report.fcpxml",
       );
     });
   });

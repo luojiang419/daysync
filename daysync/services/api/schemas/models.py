@@ -95,6 +95,10 @@ class ExportOtioRequest(BaseModel):
     output_path: str
 
 
+class ExportFcpxmlRequest(BaseModel):
+    output_path: str
+
+
 class SearchQueryResponse(BaseModel):
     query: str
     video_results: list[dict[str, Any]]

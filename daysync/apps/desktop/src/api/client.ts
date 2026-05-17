@@ -106,6 +106,11 @@ type ExportJsonResponse = {
   item_count: number;
 };
 
+type ExportFcpxmlResponse = {
+  output_path: string;
+  project_count: number;
+};
+
 type ExportJobListResponse = {
   items: ExportJob[];
 };
@@ -349,6 +354,16 @@ export async function exportOtio(
   outputPath: string,
 ): Promise<ExportJsonResponse> {
   return request<ExportJsonResponse>(`/api/projects/${projectId}/exports/otio`, {
+    method: "POST",
+    body: JSON.stringify({ output_path: outputPath }),
+  });
+}
+
+export async function exportFcpxml(
+  projectId: string,
+  outputPath: string,
+): Promise<ExportFcpxmlResponse> {
+  return request<ExportFcpxmlResponse>(`/api/projects/${projectId}/exports/fcpxml`, {
     method: "POST",
     body: JSON.stringify({ output_path: outputPath }),
   });

@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   exportCsv,
+  exportFcpxml,
   exportFcp7Xml,
   exportJson,
   exportOtio,
@@ -42,8 +43,11 @@ function formatExportJobCount(job: ExportJob): string | null {
   if (job.export_type === "csv") {
     return `${job.row_count} 行`;
   }
-  if (job.export_type === "fcp7_xml" || job.export_type === "fcpxml") {
+  if (job.export_type === "fcp7_xml") {
     return `${job.row_count} 条 sequence`;
+  }
+  if (job.export_type === "fcpxml") {
+    return `${job.row_count} 个 project`;
   }
   return `${job.row_count} 条同步结果`;
 }
@@ -346,6 +350,33 @@ export function ExportPage() {
     }
   }
 
+  async function handleExportFcpxml() {
+    if (!state.currentProject) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await refreshSyncResults();
+      const fcpxmlPath = outputPath.toLowerCase().endsWith(".csv")
+        ? `${outputPath.slice(0, -4)}.fcpxml`
+        : `${outputPath}.fcpxml`;
+      const result = await exportFcpxml(state.currentProject.id, fcpxmlPath);
+      void refreshExportJobs(true);
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: "success",
+          message: `FCPXML 已导出到 ${result.output_path}，共 ${result.project_count} 个 project。`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "导出 FCPXML 失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="page-grid">
       <article className="panel-card span-two">
@@ -438,6 +469,14 @@ export function ExportPage() {
             onClick={handleExportOtio}
           >
             {busy ? "导出中..." : "导出 OTIO"}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!outputPath || busy}
+            onClick={handleExportFcpxml}
+          >
+            {busy ? "导出中..." : "导出 FCPXML"}
           </button>
         </form>
 

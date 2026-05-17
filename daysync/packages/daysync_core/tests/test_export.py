@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 
 from daysync_core.export import (
     export_sync_report_csv,
+    export_sync_report_fcpxml,
     export_sync_report_fcp7_xml,
     export_sync_report_json,
     export_sync_report_otio,
@@ -108,6 +109,36 @@ def test_otio_export_builds_timeline_structure(
     )
 
 
+def test_fcpxml_export_builds_project_collection(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    video_subtitle_id, audio_subtitle_id = _prepare_sync_fixture(project, connection, sample_root)
+    create_manual_anchor_sync(connection, project["id"], video_subtitle_id, audio_subtitle_id)
+    output_path = tmp_path / "sync_report.fcpxml"
+
+    result = export_sync_report_fcpxml(connection, project["id"], str(output_path))
+
+    assert result["project_count"] == 1
+    content = output_path.read_text(encoding="utf-8")
+    assert "<!DOCTYPE fcpxml>" in content
+    root = ET.fromstring(content.split("\n", 2)[2])
+    assert root.tag == "fcpxml"
+    event = root.find("./event")
+    assert event is not None
+    project_node = root.find("./event/project")
+    assert project_node is not None
+    sequence = root.find("./event/project/sequence")
+    assert sequence is not None
+    assert sequence.attrib["format"].startswith("r_video_format_")
+    primary_clip = root.find(".//spine/asset-clip")
+    assert primary_clip is not None
+    assert primary_clip.attrib["srcEnable"] in {"video", "audio"}
+    nested_clip = primary_clip.find("./asset-clip")
+    assert nested_clip is not None
+    assert nested_clip.attrib["srcEnable"] in {"video", "audio"}
+
+
 def test_list_export_jobs_returns_latest_first(
     project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
 ) -> None:
@@ -119,18 +150,21 @@ def test_list_export_jobs_returns_latest_first(
     xml_path = tmp_path / "sync_report_fcp7.xml"
     json_path = tmp_path / "sync_report.json"
     otio_path = tmp_path / "sync_report.otio"
+    fcpxml_path = tmp_path / "sync_report.fcpxml"
     export_sync_report_csv(connection, project["id"], str(csv_path))
     export_sync_report_fcp7_xml(connection, project["id"], str(xml_path))
     export_sync_report_json(connection, project["id"], str(json_path))
     export_sync_report_otio(connection, project["id"], str(otio_path))
+    export_sync_report_fcpxml(connection, project["id"], str(fcpxml_path))
 
     jobs = list_export_jobs(connection, project["id"])
 
-    assert len(jobs) == 4
-    assert jobs[0]["export_type"] == "otio"
-    assert jobs[0]["output_path"] == str(otio_path)
+    assert len(jobs) == 5
+    assert jobs[0]["export_type"] == "fcpxml"
+    assert jobs[0]["output_path"] == str(fcpxml_path)
     assert jobs[0]["status"] == "succeeded"
-    assert jobs[1]["export_type"] == "json"
-    assert jobs[2]["export_type"] == "fcp7_xml"
-    assert jobs[3]["export_type"] == "csv"
-    assert jobs[3]["row_count"] == 1
+    assert jobs[1]["export_type"] == "otio"
+    assert jobs[2]["export_type"] == "json"
+    assert jobs[3]["export_type"] == "fcp7_xml"
+    assert jobs[4]["export_type"] == "csv"
+    assert jobs[4]["row_count"] == 1

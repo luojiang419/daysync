@@ -5,13 +5,20 @@ from fastapi import APIRouter, Request
 from daysync_core.db import connect_database, database_path_for_project
 from daysync_core.export import (
     export_sync_report_csv,
+    export_sync_report_fcpxml,
     export_sync_report_fcp7_xml,
     export_sync_report_json,
     export_sync_report_otio,
     list_export_jobs,
 )
 
-from ..schemas.models import ExportCsvRequest, ExportFcp7XmlRequest, ExportJsonRequest, ExportOtioRequest
+from ..schemas.models import (
+    ExportCsvRequest,
+    ExportFcpxmlRequest,
+    ExportFcp7XmlRequest,
+    ExportJsonRequest,
+    ExportOtioRequest,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/exports", tags=["export"])
 
@@ -55,3 +62,12 @@ def export_otio_route(
     root_path = request.app.state.runtime.resolve(project_id)
     with connect_database(database_path_for_project(root_path)) as connection:
         return export_sync_report_otio(connection, project_id, payload.output_path)
+
+
+@router.post("/fcpxml")
+def export_fcpxml_route(
+    project_id: str, payload: ExportFcpxmlRequest, request: Request
+) -> dict[str, object]:
+    root_path = request.app.state.runtime.resolve(project_id)
+    with connect_database(database_path_for_project(root_path)) as connection:
+        return export_sync_report_fcpxml(connection, project_id, payload.output_path)
