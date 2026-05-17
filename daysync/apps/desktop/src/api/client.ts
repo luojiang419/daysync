@@ -1,4 +1,5 @@
 import type {
+  AutoCandidateResponse,
   FlatTimeline,
   MediaFile,
   ProjectSnapshot,
@@ -54,6 +55,8 @@ type ImportSubtitlesResponse = {
 type SyncResponse = {
   sync_result: SyncResult;
 };
+
+type AutoCandidateApiResponse = AutoCandidateResponse;
 
 type SyncListResponse = {
   sync_results: SyncResult[];
@@ -169,6 +172,20 @@ export async function createManualSync(
   return request<SyncResponse>(`/api/projects/${projectId}/sync/manual-anchor`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function recommendAutoCandidates(
+  projectId: string,
+  payload: { anchor_subtitle_id: string; limit?: number; context_radius?: number },
+): Promise<AutoCandidateApiResponse> {
+  return request<AutoCandidateApiResponse>(`/api/projects/${projectId}/sync/auto-candidates`, {
+    method: "POST",
+    body: JSON.stringify({
+      anchor_subtitle_id: payload.anchor_subtitle_id,
+      limit: payload.limit ?? 5,
+      context_radius: payload.context_radius ?? 1,
+    }),
   });
 }
 

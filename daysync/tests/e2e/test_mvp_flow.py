@@ -114,6 +114,17 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
     assert len(search_data["video_results"]) == 1
     assert len(search_data["audio_results"]) == 1
 
+    auto_candidates_response = client.post(
+        f"/api/projects/{project_id}/sync/auto-candidates",
+        json={
+            "anchor_subtitle_id": search_data["video_results"][0]["subtitle_id"],
+            "limit": 3,
+            "context_radius": 1,
+        },
+    )
+    assert auto_candidates_response.status_code == 200
+    assert auto_candidates_response.json()["candidates"][0]["subtitle_id"] == search_data["audio_results"][0]["subtitle_id"]
+
     sync_response = client.post(
         f"/api/projects/{project_id}/sync/manual-anchor",
         json={

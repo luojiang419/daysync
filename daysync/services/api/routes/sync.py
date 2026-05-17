@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from daysync_core.db import connect_database, database_path_for_project
-from daysync_core.sync import create_manual_anchor_sync, list_sync_results
+from daysync_core.sync import create_manual_anchor_sync, list_sync_results, recommend_auto_candidates
 
-from ..schemas.models import ManualSyncRequest
+from ..schemas.models import AutoCandidateRequest, ManualSyncRequest
 
 router = APIRouter(prefix="/projects/{project_id}/sync", tags=["sync"])
 
@@ -23,6 +23,21 @@ def manual_anchor_sync_route(
             payload.audio_subtitle_id,
         )
         return {"sync_result": result}
+
+
+@router.post("/auto-candidates")
+def auto_candidates_route(
+    project_id: str, payload: AutoCandidateRequest, request: Request
+) -> dict[str, object]:
+    root_path = request.app.state.runtime.resolve(project_id)
+    with connect_database(database_path_for_project(root_path)) as connection:
+        return recommend_auto_candidates(
+            connection,
+            project_id,
+            payload.anchor_subtitle_id,
+            payload.limit,
+            payload.context_radius,
+        )
 
 
 @router.get("/results")

@@ -44,6 +44,12 @@ class ManualSyncRequest(BaseModel):
     audio_subtitle_id: str
 
 
+class AutoCandidateRequest(BaseModel):
+    anchor_subtitle_id: str
+    limit: int = Field(default=5, ge=1, le=20)
+    context_radius: int = Field(default=1, ge=0, le=3)
+
+
 class ExportCsvRequest(BaseModel):
     output_path: str
 

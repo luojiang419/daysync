@@ -360,6 +360,43 @@ textarea {
   gap: 18px;
 }
 
+.auto-candidate-panel {
+  display: grid;
+  gap: 16px;
+  border: 1px solid rgba(57, 47, 39, 0.1);
+  border-radius: 20px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.candidate-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.candidate-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(57, 47, 39, 0.1);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.candidate-card-header,
+.candidate-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.candidate-context {
+  display: grid;
+  gap: 4px;
+  color: var(--text-soft);
+}
+
 .result-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

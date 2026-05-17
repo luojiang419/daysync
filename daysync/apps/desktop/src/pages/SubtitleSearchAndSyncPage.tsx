@@ -4,8 +4,11 @@ import {
   ApiError,
   createManualSync,
   importSubtitles,
+  recommendAutoCandidates,
   searchSubtitles,
 } from "../api/client";
+import type { AutoCandidate, AutoCandidateResponse } from "../api/types";
+import { AutoCandidatePanel } from "../components/AutoCandidatePanel";
 import { chooseSubtitleFile } from "../api/tauri";
 import { SubtitleMatchBoard } from "../components/SubtitleMatchBoard";
 import { useAppState } from "../state/AppState";
@@ -26,7 +29,13 @@ export function SubtitleSearchAndSyncPage() {
   const [videoSrtPath, setVideoSrtPath] = useState("");
   const [audioSrtPath, setAudioSrtPath] = useState("");
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState<"video-import" | "audio-import" | "search" | "align" | null>(null);
+  const [busy, setBusy] = useState<
+    "video-import" | "audio-import" | "search" | "align" | "recommend" | null
+  >(null);
+  const [recommendation, setRecommendation] = useState<AutoCandidateResponse | null>(null);
+  const [recommendingFrom, setRecommendingFrom] = useState<"video_ref" | "external_audio" | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!videoTimelineId && videoTimelines[0]) {
@@ -95,6 +104,7 @@ export function SubtitleSearchAndSyncPage() {
     setBusy("search");
     try {
       const results = await searchSubtitles(state.currentProject.id, query, 20);
+      setRecommendation(null);
       dispatch({ type: "SET_SEARCH_RESULTS", payload: results });
       dispatch({
         type: "SET_NOTICE",
@@ -106,6 +116,78 @@ export function SubtitleSearchAndSyncPage() {
     } finally {
       setBusy(null);
     }
+  }
+
+  async function handleRecommend(anchorSubtitleId: string) {
+    if (!state.currentProject) {
+      return;
+    }
+    const anchorTrackType =
+      state.selectedVideoSubtitleId === anchorSubtitleId ? "video_ref" : "external_audio";
+    setBusy("recommend");
+    setRecommendingFrom(anchorTrackType);
+    try {
+      const result = await recommendAutoCandidates(state.currentProject.id, {
+        anchor_subtitle_id: anchorSubtitleId,
+        limit: 5,
+        context_radius: 1,
+      });
+      setRecommendation(result);
+      dispatch({
+        type: "SET_NOTICE",
+        payload: { tone: "success", message: "已生成自动候选，请选择更合适的一条。" },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "生成自动候选失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(null);
+      setRecommendingFrom(null);
+    }
+  }
+
+  function handleUseCandidate(candidate: AutoCandidate) {
+    const currentResults = state.searchResults;
+    const currentVideoSelection = state.selectedVideoSubtitleId;
+    const currentAudioSelection = state.selectedAudioSubtitleId;
+    if (currentResults) {
+      const listKey: "audio_results" | "video_results" =
+        recommendation?.target_track_type === "external_audio" ? "audio_results" : "video_results";
+      const candidateAsSearchResult = {
+        subtitle_id: candidate.subtitle_id,
+        track_type: candidate.track_type,
+        raw_text: candidate.raw_text,
+        normalized_text: candidate.normalized_text,
+        source_media_file_id: candidate.source_media_file_id,
+        source_start_ms: candidate.source_start_ms,
+        source_end_ms: candidate.source_end_ms,
+        flat_start_ms: candidate.flat_start_ms,
+        flat_end_ms: candidate.flat_end_ms,
+        relevance_score: candidate.final_score,
+        source_filename: candidate.source_filename,
+      };
+      const targetList = currentResults[listKey];
+      const mergedList = targetList.some((item) => item.subtitle_id === candidate.subtitle_id)
+        ? targetList
+        : [candidateAsSearchResult, ...targetList];
+      dispatch({
+        type: "SET_SEARCH_RESULTS",
+        payload: { ...currentResults, [listKey]: mergedList },
+      });
+    }
+
+    if (recommendation?.target_track_type === "external_audio") {
+      dispatch({ type: "SELECT_VIDEO_SUBTITLE", payload: currentVideoSelection });
+      dispatch({ type: "SELECT_AUDIO_SUBTITLE", payload: candidate.subtitle_id });
+    } else {
+      dispatch({ type: "SELECT_AUDIO_SUBTITLE", payload: currentAudioSelection });
+      dispatch({ type: "SELECT_VIDEO_SUBTITLE", payload: candidate.subtitle_id });
+    }
+
+    dispatch({
+      type: "SET_NOTICE",
+      payload: { tone: "success", message: "候选已应用，现在可以直接点击一键对齐。" },
+    });
   }
 
   async function handleAlign() {
@@ -229,6 +311,33 @@ export function SubtitleSearchAndSyncPage() {
           </button>
         </form>
 
+        <div className="button-row">
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={!state.selectedVideoSubtitleId || busy === "recommend"}
+            onClick={() =>
+              state.selectedVideoSubtitleId && handleRecommend(state.selectedVideoSubtitleId)
+            }
+          >
+            {busy === "recommend" && recommendingFrom === "video_ref"
+              ? "推荐中..."
+              : "根据视频锚点推荐音频候选"}
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={!state.selectedAudioSubtitleId || busy === "recommend"}
+            onClick={() =>
+              state.selectedAudioSubtitleId && handleRecommend(state.selectedAudioSubtitleId)
+            }
+          >
+            {busy === "recommend" && recommendingFrom === "external_audio"
+              ? "推荐中..."
+              : "根据音频锚点推荐视频候选"}
+          </button>
+        </div>
+
         <SubtitleMatchBoard
           videoResults={state.searchResults?.video_results ?? []}
           audioResults={state.searchResults?.audio_results ?? []}
@@ -244,6 +353,10 @@ export function SubtitleSearchAndSyncPage() {
           }
           onAlign={handleAlign}
         />
+
+        {recommendation ? (
+          <AutoCandidatePanel recommendation={recommendation} onUseCandidate={handleUseCandidate} />
+        ) : null}
       </article>
     </section>
   );

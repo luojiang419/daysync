@@ -66,6 +66,55 @@ export type SearchResults = {
   audio_results: SearchResult[];
 };
 
+export type AutoCandidate = {
+  subtitle_id: string;
+  track_type: "video_ref" | "external_audio";
+  track_id: string;
+  raw_text: string;
+  normalized_text: string;
+  source_media_file_id?: string | null;
+  source_filename?: string | null;
+  source_start_ms?: number | null;
+  source_end_ms?: number | null;
+  flat_start_ms: number;
+  flat_end_ms: number;
+  mapping_status: "ok" | "warning" | "failed";
+  mapping_warning?: string | null;
+  text_similarity: number;
+  context_similarity: number;
+  final_score: number;
+  negative_evidence_count: number;
+  duplicate_count: number;
+  context_before_text: string;
+  context_after_text: string;
+  context_window_text: string;
+};
+
+export type AutoCandidateResponse = {
+  anchor: {
+    subtitle_id: string;
+    track_type: "video_ref" | "external_audio";
+    track_id: string;
+    raw_text: string;
+    normalized_text: string;
+    source_media_file_id?: string | null;
+    source_filename?: string | null;
+    source_start_ms?: number | null;
+    source_end_ms?: number | null;
+    flat_start_ms: number;
+    flat_end_ms: number;
+    mapping_status: "ok" | "warning" | "failed";
+    mapping_warning?: string | null;
+    context_before_text: string;
+    context_after_text: string;
+    context_window_text: string;
+  };
+  target_track_type: "video_ref" | "external_audio";
+  limit: number;
+  context_radius: number;
+  candidates: AutoCandidate[];
+};
+
 export type SyncResult = {
   id: string;
   offset_ms: number;
