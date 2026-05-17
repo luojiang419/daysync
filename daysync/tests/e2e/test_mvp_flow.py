@@ -191,6 +191,13 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
     assert export_response.status_code == 200
     assert export_response.json()["row_count"] == 2
 
+    export_xml_response = client.post(
+        f"/api/projects/{project_id}/exports/fcp7-xml",
+        json={"output_path": str(tmp_path / "exports" / "sync_report_fcp7.xml")},
+    )
+    assert export_xml_response.status_code == 200
+    assert export_xml_response.json()["sequence_count"] == 2
+
     settings_response = client.put(
         f"/api/projects/{project_id}/settings",
         json={

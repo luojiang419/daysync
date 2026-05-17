@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   exportCsv,
+  exportFcp7Xml,
   listReviewQueue,
   listSyncResults,
   reviewSyncResult,
@@ -212,6 +213,32 @@ export function ExportPage() {
     }
   }
 
+  async function handleExportFcp7Xml() {
+    if (!state.currentProject) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await refreshSyncResults();
+      const xmlPath = outputPath.toLowerCase().endsWith(".csv")
+        ? `${outputPath.slice(0, -4)}_fcp7.xml`
+        : `${outputPath}_fcp7.xml`;
+      const result = await exportFcp7Xml(state.currentProject.id, xmlPath);
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: "success",
+          message: `FCP 7 XML 已导出到 ${result.output_path}，共 ${result.sequence_count} 条 sequence。`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "导出 FCP 7 XML 失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="page-grid">
       <article className="panel-card span-two">
@@ -280,6 +307,14 @@ export function ExportPage() {
           </label>
           <button type="submit" className="primary-button" disabled={!outputPath || busy}>
             {busy ? "导出中..." : "导出 sync_report.csv"}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!outputPath || busy}
+            onClick={handleExportFcp7Xml}
+          >
+            {busy ? "导出中..." : "导出 FCP 7 XML"}
           </button>
         </form>
 

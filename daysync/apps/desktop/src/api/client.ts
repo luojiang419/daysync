@@ -95,6 +95,11 @@ type ExportCsvResponse = {
   row_count: number;
 };
 
+type ExportFcp7XmlResponse = {
+  output_path: string;
+  sequence_count: number;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
@@ -304,6 +309,16 @@ export async function exportCsv(
   outputPath: string,
 ): Promise<ExportCsvResponse> {
   return request<ExportCsvResponse>(`/api/projects/${projectId}/exports/csv`, {
+    method: "POST",
+    body: JSON.stringify({ output_path: outputPath }),
+  });
+}
+
+export async function exportFcp7Xml(
+  projectId: string,
+  outputPath: string,
+): Promise<ExportFcp7XmlResponse> {
+  return request<ExportFcp7XmlResponse>(`/api/projects/${projectId}/exports/fcp7-xml`, {
     method: "POST",
     body: JSON.stringify({ output_path: outputPath }),
   });
