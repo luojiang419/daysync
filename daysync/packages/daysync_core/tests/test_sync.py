@@ -75,8 +75,9 @@ def test_manual_anchor_offset(
     project, connection = project_workspace
     video_subtitle_id, audio_subtitle_id = _prepare_sync_fixture(project, connection, sample_root)
     result = create_manual_anchor_sync(connection, project["id"], video_subtitle_id, audio_subtitle_id)
-    assert result["offset_ms"] == 574180
-    assert result["status"] == "accepted_manual"
+    assert result["sync_result"]["offset_ms"] == 574180
+    assert result["sync_result"]["status"] == "accepted_manual"
+    assert result["generated_count"] == 1
 
 
 def test_manual_anchor_rejects_unmapped(project_workspace: tuple[dict[str, object], object]) -> None:
@@ -92,6 +93,119 @@ def test_list_sync_results(project_workspace: tuple[dict[str, object], object], 
     create_manual_anchor_sync(connection, project["id"], video_subtitle_id, audio_subtitle_id)
     rows = list_sync_results(connection, project["id"])
     assert rows[0]["video_anchor_text"] == "我们到了这里"
+
+
+def test_manual_anchor_generates_track_sync_results_for_entire_timeline(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    video_path_1 = sample_root / "media" / "A001_C001.mov"
+    video_path_2 = sample_root / "media" / "A001_C002.mov"
+    audio_path = sample_root / "media" / "ZOOM0001.wav"
+    video_payload_1 = json.loads((sample_root / "media" / "mock_video_001.json").read_text(encoding="utf-8"))
+    video_payload_2 = json.loads((sample_root / "media" / "mock_video_002.json").read_text(encoding="utf-8"))
+    audio_payload = json.loads((sample_root / "media" / "mock_audio_001.json").read_text(encoding="utf-8"))
+    imported = import_media(
+        connection,
+        project["id"],
+        [str(video_path_1), str(video_path_2), str(audio_path)],
+        probe_func=lambda path: parse_ffprobe_payload(
+            path,
+            video_payload_1
+            if Path(path).name == "A001_C001.mov"
+            else video_payload_2
+            if Path(path).name == "A001_C002.mov"
+            else audio_payload,
+        ),
+    )
+    video_ids = [item["id"] for item in imported["imported"] if item["media_type"] == "video"]
+    audio_ids = [item["id"] for item in imported["imported"] if item["media_type"] == "audio"]
+    video_timeline = generate_flat_timeline(connection, project["id"], "video", video_ids, "filename", 1000)
+    audio_timeline = generate_flat_timeline(connection, project["id"], "audio", audio_ids, "filename", 1000)
+
+    anchor_offset_ms = 574180
+    first_video_anchor_ms = 1000
+    second_video_anchor_ms = int(video_timeline["items"][1]["flat_start_ms"]) + 500
+    video_srt_path = tmp_path / "video_track_sync.srt"
+    video_srt_path.write_text(
+        "\n".join(
+            [
+                "1",
+                f"{_format_srt_timestamp(first_video_anchor_ms)} --> {_format_srt_timestamp(first_video_anchor_ms + 1000)}",
+                "我们到了这里",
+                "",
+                "2",
+                f"{_format_srt_timestamp(second_video_anchor_ms)} --> {_format_srt_timestamp(second_video_anchor_ms + 1000)}",
+                "继续往前走",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    audio_srt_path = tmp_path / "audio_track_sync.srt"
+    audio_srt_path.write_text(
+        "\n".join(
+            [
+                "1",
+                f"{_format_srt_timestamp(first_video_anchor_ms + anchor_offset_ms)} --> {_format_srt_timestamp(first_video_anchor_ms + anchor_offset_ms + 1000)}",
+                "我们到了这里",
+                "",
+                "2",
+                f"{_format_srt_timestamp(second_video_anchor_ms + anchor_offset_ms)} --> {_format_srt_timestamp(second_video_anchor_ms + anchor_offset_ms + 1000)}",
+                "继续往前走",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    import_srt(
+        connection,
+        project["id"],
+        video_timeline["flat_timeline_id"],
+        "video_ref",
+        "srt_import",
+        str(video_srt_path),
+        "zh-CN",
+    )
+    import_srt(
+        connection,
+        project["id"],
+        audio_timeline["flat_timeline_id"],
+        "external_audio",
+        "srt_import",
+        str(audio_srt_path),
+        "zh-CN",
+    )
+
+    subtitle_rows = connection.execute(
+        """
+        SELECT s.id, st.track_type, s.subtitle_index
+        FROM subtitles s
+        JOIN subtitle_tracks st ON st.id = s.track_id
+        WHERE st.project_id = ?
+        ORDER BY st.track_type, s.subtitle_index
+        """,
+        (project["id"],),
+    ).fetchall()
+    video_subtitle_id = next(
+        row["id"]
+        for row in subtitle_rows
+        if row["track_type"] == "video_ref" and row["subtitle_index"] == 1
+    )
+    audio_subtitle_id = next(
+        row["id"]
+        for row in subtitle_rows
+        if row["track_type"] == "external_audio" and row["subtitle_index"] == 1
+    )
+
+    result = create_manual_anchor_sync(connection, project["id"], video_subtitle_id, audio_subtitle_id)
+
+    assert result["generated_count"] == 2
+    rows = list_sync_results(connection, project["id"])
+    assert len(rows) == 2
+    assert {row["video_file"] for row in rows} == {"A001_C001.mov", "A001_C002.mov"}
+    assert {row["audio_file"] for row in rows} == {"ZOOM0001.wav"}
 
 
 def test_recommend_auto_candidates_prefers_context_match(
@@ -542,3 +656,11 @@ def _prepare_cluster_fixture(
         "audio_good_2": next(row["id"] for row in subtitle_rows if row["track_type"] == "external_audio" and row["subtitle_index"] == 3),
         "audio_good_3": next(row["id"] for row in subtitle_rows if row["track_type"] == "external_audio" and row["subtitle_index"] == 4),
     }
+
+
+def _format_srt_timestamp(value_ms: int) -> str:
+    hours = value_ms // 3_600_000
+    minutes = (value_ms % 3_600_000) // 60_000
+    seconds = (value_ms % 60_000) // 1_000
+    milliseconds = value_ms % 1_000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"

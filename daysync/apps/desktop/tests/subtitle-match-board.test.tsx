@@ -64,7 +64,7 @@ describe("SubtitleMatchBoard", () => {
 
     await user.click(screen.getAllByRole("button", { name: /我们到了这里/i })[0]);
     await user.click(screen.getAllByRole("button", { name: /我们到了这里/i })[1]);
-    await user.click(screen.getByRole("button", { name: "一键对齐" }));
+    await user.click(screen.getByRole("button", { name: "整轨一键对齐" }));
 
     expect(onAlign).toHaveBeenCalledTimes(1);
     expect(screen.getByText("最近 offset: 574180 ms")).toBeInTheDocument();

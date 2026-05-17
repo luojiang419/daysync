@@ -30,13 +30,12 @@ def manual_anchor_sync_route(
 ) -> dict[str, object]:
     root_path = request.app.state.runtime.resolve(project_id)
     with connect_database(database_path_for_project(root_path)) as connection:
-        result = create_manual_anchor_sync(
+        return create_manual_anchor_sync(
             connection,
             project_id,
             payload.video_subtitle_id,
             payload.audio_subtitle_id,
         )
-        return {"sync_result": result}
 
 
 @router.post("/auto-candidates")

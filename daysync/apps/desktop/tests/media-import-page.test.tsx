@@ -12,6 +12,7 @@ vi.mock("../src/state/AppState", () => ({
         root_path: "D:\\projects\\demo",
       },
       mediaFiles: [],
+      flatTimelines: [],
     },
     dispatch: vi.fn(),
   }),
@@ -22,6 +23,7 @@ vi.mock("../src/api/client", async () => {
   return {
     ...actual,
     importMedia: vi.fn(),
+    openProject: vi.fn(),
   };
 });
 
@@ -37,7 +39,9 @@ describe("MediaImportPage", () => {
     expect(screen.getByRole("button", { name: "选择视频目录" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "选择外录音频目录" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "选择文件" })).not.toBeInTheDocument();
-    expect(screen.getByText("把视频目录或外录音频目录直接拖进这里也可以导入")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "导入目录并自动生成整轨" })).toBeInTheDocument();
+    expect(screen.getByText("视频整轨")).toBeInTheDocument();
+    expect(screen.getByText("音频整轨")).toBeInTheDocument();
   });
 
   it("拖入媒体文件时会自动归并到父目录", () => {

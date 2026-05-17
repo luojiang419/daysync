@@ -1,4 +1,4 @@
-const SUPPORTED_MEDIA_EXTENSIONS = [".mov", ".mp4", ".wav", ".m4a"];
+const SUPPORTED_MEDIA_EXTENSIONS = [".mov", ".mp4", ".wav", ".m4a", ".mp3"];
 
 export function normalizeDroppedDirectories(paths: string[]): string[] {
   const unique = new Set<string>();

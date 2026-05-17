@@ -17,55 +17,62 @@ def create_manual_anchor_sync(
     video_subtitle_id: str,
     audio_subtitle_id: str,
 ) -> dict[str, object]:
-    video_anchor = _load_anchor(connection, project_id, video_subtitle_id, "video_ref")
-    audio_anchor = _load_anchor(connection, project_id, audio_subtitle_id, "external_audio")
+    video_anchor = _load_project_subtitle(connection, project_id, video_subtitle_id)
+    audio_anchor = _load_project_subtitle(connection, project_id, audio_subtitle_id)
+    if video_anchor["track_type"] != "video_ref" or audio_anchor["track_type"] != "external_audio":
+        raise DaySyncError("ANCHOR_SUBTITLE_INVALID", "Selected anchor subtitle is invalid")
     if video_anchor["source_start_ms"] is None or audio_anchor["source_start_ms"] is None:
         raise DaySyncError(
             "ANCHOR_SUBTITLE_INVALID",
             "Selected subtitles do not have mapped source times",
         )
-
-    offset_ms = audio_anchor["source_start_ms"] - video_anchor["source_start_ms"]
-    video_media = _load_media(connection, video_anchor["source_media_file_id"])
-    sync_id = new_uuid()
     now = utc_now_iso()
-    sync_result = {
-        "id": sync_id,
-        "project_id": project_id,
-        "session_id": None,
-        "video_media_file_id": video_anchor["source_media_file_id"],
-        "audio_media_file_id": audio_anchor["source_media_file_id"],
-        "video_in_ms": 0,
-        "video_out_ms": video_media["duration_ms"],
-        "audio_in_ms": offset_ms,
-        "audio_out_ms": offset_ms + video_media["duration_ms"],
-        "offset_ms": offset_ms,
-        "drift_ppm": None,
-        "confidence_score": 1.0,
-        "status": "accepted_manual",
-        "source": "manual_anchor",
-        "video_anchor_subtitle_id": video_subtitle_id,
-        "audio_anchor_subtitle_id": audio_subtitle_id,
-        "confidence_breakdown_json": json.dumps({"manual_anchor": True}),
-        "created_at": now,
-        "updated_at": now,
-    }
-    connection.execute(
-        """
-        INSERT INTO sync_results (
-          id, project_id, session_id, video_media_file_id, audio_media_file_id, video_in_ms, video_out_ms,
-          audio_in_ms, audio_out_ms, offset_ms, drift_ppm, confidence_score, status, source,
-          video_anchor_subtitle_id, audio_anchor_subtitle_id, confidence_breakdown_json, created_at, updated_at
-        )
-        VALUES (:id, :project_id, :session_id, :video_media_file_id, :audio_media_file_id, :video_in_ms,
-                :video_out_ms, :audio_in_ms, :audio_out_ms, :offset_ms, :drift_ppm, :confidence_score,
-                :status, :source, :video_anchor_subtitle_id, :audio_anchor_subtitle_id,
-                :confidence_breakdown_json, :created_at, :updated_at)
-        """,
-        sync_result,
+    track_offset_ms = audio_anchor["flat_start_ms"] - video_anchor["flat_start_ms"]
+    video_items = _load_flat_timeline_items(connection, video_anchor["flat_timeline_id"])
+    audio_items = _load_flat_timeline_items(connection, audio_anchor["flat_timeline_id"])
+    sync_results = _build_track_sync_results(
+        project_id=project_id,
+        video_anchor=video_anchor,
+        audio_anchor=audio_anchor,
+        video_items=video_items,
+        audio_items=audio_items,
+        track_offset_ms=track_offset_ms,
+        created_at=now,
     )
+    if not sync_results:
+        raise DaySyncError("ANCHOR_SUBTITLE_INVALID", "Selected anchor pair does not produce any overlapping track segment")
+
+    _clear_existing_manual_sync_results(connection, project_id, sync_results)
+    for sync_result in sync_results:
+        connection.execute(
+            """
+            INSERT INTO sync_results (
+              id, project_id, session_id, video_media_file_id, audio_media_file_id, video_in_ms, video_out_ms,
+              audio_in_ms, audio_out_ms, offset_ms, drift_ppm, confidence_score, status, source,
+              video_anchor_subtitle_id, audio_anchor_subtitle_id, confidence_breakdown_json, created_at, updated_at
+            )
+            VALUES (:id, :project_id, :session_id, :video_media_file_id, :audio_media_file_id, :video_in_ms,
+                    :video_out_ms, :audio_in_ms, :audio_out_ms, :offset_ms, :drift_ppm, :confidence_score,
+                    :status, :source, :video_anchor_subtitle_id, :audio_anchor_subtitle_id,
+                    :confidence_breakdown_json, :created_at, :updated_at)
+            """,
+            sync_result,
+        )
     connection.commit()
-    return sync_result
+    representative_sync = next(
+        (
+            item
+            for item in sync_results
+            if item["video_media_file_id"] == video_anchor["source_media_file_id"]
+            and item["audio_media_file_id"] == audio_anchor["source_media_file_id"]
+        ),
+        sync_results[0],
+    )
+    return {
+        "sync_result": representative_sync,
+        "generated_count": len(sync_results),
+        "track_offset_ms": track_offset_ms,
+    }
 
 
 def list_sync_results(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
@@ -675,7 +682,7 @@ def _load_project_subtitle(connection: sqlite3.Connection, project_id: str, subt
         SELECT s.id, s.track_id, s.subtitle_index, s.flat_start_ms, s.flat_end_ms,
                s.source_media_file_id, s.source_start_ms, s.source_end_ms,
                s.raw_text, s.normalized_text, s.mapping_status, s.mapping_warning,
-               st.track_type, mf.filename AS source_filename
+               st.track_type, st.flat_timeline_id, mf.filename AS source_filename
         FROM subtitles s
         JOIN subtitle_tracks st ON st.id = s.track_id
         LEFT JOIN media_files mf ON mf.id = s.source_media_file_id
@@ -694,7 +701,7 @@ def _load_track_subtitles(connection: sqlite3.Connection, track_id: str) -> list
         SELECT s.id, s.track_id, s.subtitle_index, s.flat_start_ms, s.flat_end_ms,
                s.source_media_file_id, s.source_start_ms, s.source_end_ms,
                s.raw_text, s.normalized_text, s.mapping_status, s.mapping_warning,
-               st.track_type, mf.filename AS source_filename
+               st.track_type, st.flat_timeline_id, mf.filename AS source_filename
         FROM subtitles s
         JOIN subtitle_tracks st ON st.id = s.track_id
         LEFT JOIN media_files mf ON mf.id = s.source_media_file_id
@@ -714,7 +721,7 @@ def _load_project_subtitles_by_track_type(
         SELECT s.id, s.track_id, s.subtitle_index, s.flat_start_ms, s.flat_end_ms,
                s.source_media_file_id, s.source_start_ms, s.source_end_ms,
                s.raw_text, s.normalized_text, s.mapping_status, s.mapping_warning,
-               st.track_type, mf.filename AS source_filename
+               st.track_type, st.flat_timeline_id, mf.filename AS source_filename
         FROM subtitles s
         JOIN subtitle_tracks st ON st.id = s.track_id
         LEFT JOIN media_files mf ON mf.id = s.source_media_file_id
@@ -731,6 +738,21 @@ def _group_rows_by_track(rows: list[sqlite3.Row]) -> dict[str, list[sqlite3.Row]
     for row in rows:
         grouped.setdefault(row["track_id"], []).append(row)
     return grouped
+
+
+def _load_flat_timeline_items(connection: sqlite3.Connection, flat_timeline_id: str) -> list[sqlite3.Row]:
+    rows = connection.execute(
+        """
+        SELECT fti.id, fti.media_file_id, fti.item_index, fti.flat_start_ms, fti.flat_end_ms,
+               fti.source_start_ms, fti.source_end_ms, fti.gap_after_ms, mf.filename
+        FROM flat_timeline_items fti
+        JOIN media_files mf ON mf.id = fti.media_file_id
+        WHERE fti.flat_timeline_id = ?
+        ORDER BY fti.item_index
+        """,
+        (flat_timeline_id,),
+    ).fetchall()
+    return list(rows)
 
 
 def _count_normalized_duplicates(rows: list[sqlite3.Row]) -> dict[str, int]:
@@ -869,6 +891,98 @@ def _average_metric(items: list[dict[str, object]], key: str) -> float:
     if not items:
         return 0.0
     return sum(float(item[key]) for item in items) / len(items)
+
+
+def _build_track_sync_results(
+    *,
+    project_id: str,
+    video_anchor: sqlite3.Row,
+    audio_anchor: sqlite3.Row,
+    video_items: list[sqlite3.Row],
+    audio_items: list[sqlite3.Row],
+    track_offset_ms: int,
+    created_at: str,
+) -> list[dict[str, object]]:
+    sync_results: list[dict[str, object]] = []
+    for video_item in video_items:
+        for audio_item in audio_items:
+            common_start_ms = max(
+                int(video_item["flat_start_ms"]),
+                int(audio_item["flat_start_ms"]) - track_offset_ms,
+            )
+            common_end_ms = min(
+                int(video_item["flat_end_ms"]),
+                int(audio_item["flat_end_ms"]) - track_offset_ms,
+            )
+            if common_start_ms >= common_end_ms:
+                continue
+
+            video_in_ms = int(video_item["source_start_ms"]) + (common_start_ms - int(video_item["flat_start_ms"]))
+            video_out_ms = int(video_item["source_start_ms"]) + (common_end_ms - int(video_item["flat_start_ms"]))
+            audio_in_ms = int(audio_item["source_start_ms"]) + (
+                common_start_ms + track_offset_ms - int(audio_item["flat_start_ms"])
+            )
+            audio_out_ms = int(audio_item["source_start_ms"]) + (
+                common_end_ms + track_offset_ms - int(audio_item["flat_start_ms"])
+            )
+            if video_in_ms >= video_out_ms or audio_in_ms >= audio_out_ms:
+                continue
+
+            sync_results.append(
+                {
+                    "id": new_uuid(),
+                    "project_id": project_id,
+                    "session_id": None,
+                    "video_media_file_id": video_item["media_file_id"],
+                    "audio_media_file_id": audio_item["media_file_id"],
+                    "video_in_ms": video_in_ms,
+                    "video_out_ms": video_out_ms,
+                    "audio_in_ms": audio_in_ms,
+                    "audio_out_ms": audio_out_ms,
+                    "offset_ms": audio_in_ms - video_in_ms,
+                    "drift_ppm": None,
+                    "confidence_score": 1.0,
+                    "status": "accepted_manual",
+                    "source": "manual_anchor",
+                    "video_anchor_subtitle_id": video_anchor["id"],
+                    "audio_anchor_subtitle_id": audio_anchor["id"],
+                    "confidence_breakdown_json": json.dumps(
+                        {
+                            "manual_anchor": True,
+                            "track_sync": True,
+                            "track_offset_ms": track_offset_ms,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "created_at": created_at,
+                    "updated_at": created_at,
+                }
+            )
+    return sync_results
+
+
+def _clear_existing_manual_sync_results(
+    connection: sqlite3.Connection,
+    project_id: str,
+    sync_results: list[dict[str, object]],
+) -> None:
+    video_media_ids = sorted({str(item["video_media_file_id"]) for item in sync_results})
+    audio_media_ids = sorted({str(item["audio_media_file_id"]) for item in sync_results})
+    if not video_media_ids or not audio_media_ids:
+        return
+    connection.execute(
+        """
+        DELETE FROM sync_results
+        WHERE project_id = ?
+          AND source = 'manual_anchor'
+          AND video_media_file_id IN ({video_placeholders})
+          AND audio_media_file_id IN ({audio_placeholders})
+        """.format(
+            video_placeholders=",".join("?" for _ in video_media_ids),
+            audio_placeholders=",".join("?" for _ in audio_media_ids),
+        ),
+        (project_id, *video_media_ids, *audio_media_ids),
+    )
 
 
 def _evaluate_auto_accept(

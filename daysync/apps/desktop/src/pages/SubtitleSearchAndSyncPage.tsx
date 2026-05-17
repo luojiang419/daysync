@@ -6,6 +6,7 @@ import {
   createClusterCandidate,
   createManualSync,
   importSubtitles,
+  listSyncResults,
   recommendAutoCandidates,
   saveProjectSettings,
   searchSubtitles,
@@ -55,18 +56,22 @@ export function SubtitleSearchAndSyncPage() {
   const [clusterSamples, setClusterSamples] = useState<OffsetClusterSample[]>([]);
   const [clusterAnalysis, setClusterAnalysis] = useState<OffsetClusterAnalysisResponse | null>(null);
   const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(false);
+  const latestVideoTimeline = videoTimelines[videoTimelines.length - 1];
+  const latestAudioTimeline = audioTimelines[audioTimelines.length - 1];
+  const latestVideoTimelineId = latestVideoTimeline?.flat_timeline_id ?? latestVideoTimeline?.id ?? "";
+  const latestAudioTimelineId = latestAudioTimeline?.flat_timeline_id ?? latestAudioTimeline?.id ?? "";
 
   useEffect(() => {
-    if (!videoTimelineId && videoTimelines[0]) {
-      setVideoTimelineId(videoTimelines[0].flat_timeline_id ?? videoTimelines[0].id ?? "");
+    if (!videoTimelineId && latestVideoTimelineId) {
+      setVideoTimelineId(latestVideoTimelineId);
     }
-  }, [videoTimelineId, videoTimelines]);
+  }, [latestVideoTimelineId, videoTimelineId]);
 
   useEffect(() => {
-    if (!audioTimelineId && audioTimelines[0]) {
-      setAudioTimelineId(audioTimelines[0].flat_timeline_id ?? audioTimelines[0].id ?? "");
+    if (!audioTimelineId && latestAudioTimelineId) {
+      setAudioTimelineId(latestAudioTimelineId);
     }
-  }, [audioTimelineId, audioTimelines]);
+  }, [audioTimelineId, latestAudioTimelineId]);
 
   useEffect(() => {
     if (!state.currentProject || !state.projectSettings) {
@@ -75,15 +80,13 @@ export function SubtitleSearchAndSyncPage() {
     const workspace = state.projectSettings.subtitle_workspace;
     setIsRestoringWorkspace(true);
     setVideoTimelineId(
-      workspace.video_timeline_id ||
-        videoTimelines[0]?.flat_timeline_id ||
-        videoTimelines[0]?.id ||
+      latestVideoTimelineId ||
+        workspace.video_timeline_id ||
         "",
     );
     setAudioTimelineId(
-      workspace.audio_timeline_id ||
-        audioTimelines[0]?.flat_timeline_id ||
-        audioTimelines[0]?.id ||
+      latestAudioTimelineId ||
+        workspace.audio_timeline_id ||
         "",
     );
     setVideoSrtPath(workspace.video_srt_path || "");
@@ -93,7 +96,7 @@ export function SubtitleSearchAndSyncPage() {
     setClusterAnalysis(null);
     const timeoutId = window.setTimeout(() => setIsRestoringWorkspace(false), 0);
     return () => window.clearTimeout(timeoutId);
-  }, [audioTimelines, state.currentProject?.id, state.projectSettings, videoTimelines]);
+  }, [latestAudioTimelineId, latestVideoTimelineId, state.currentProject?.id, state.projectSettings]);
 
   useEffect(() => {
     if (!state.currentProject || !state.projectSettings || isRestoringWorkspace) {
@@ -190,7 +193,7 @@ export function SubtitleSearchAndSyncPage() {
       dispatch({ type: "SET_SEARCH_RESULTS", payload: results });
       dispatch({
         type: "SET_NOTICE",
-        payload: { tone: "success", message: "字幕搜索已完成，请左右各选择一条锚点。" },
+        payload: { tone: "success", message: "字幕搜索已完成，请选择一组锚点后把结果批量应用到整轨。" },
       });
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "搜索字幕失败。";
@@ -433,10 +436,14 @@ export function SubtitleSearchAndSyncPage() {
         video_subtitle_id: state.selectedVideoSubtitleId,
         audio_subtitle_id: state.selectedAudioSubtitleId,
       });
-      dispatch({ type: "ADD_SYNC_RESULT", payload: result.sync_result });
+      const refreshed = await listSyncResults(state.currentProject.id);
+      dispatch({ type: "SET_SYNC_RESULTS", payload: refreshed.sync_results });
       dispatch({
         type: "SET_NOTICE",
-        payload: { tone: "success", message: `手动同步已保存，offset ${result.sync_result.offset_ms} ms。` },
+        payload: {
+          tone: "success",
+          message: `整轨对齐已保存，轨道 offset ${result.track_offset_ms} ms，本次共生成 ${result.generated_count} 条同步结果。`,
+        },
       });
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "手动同步失败。";
@@ -531,7 +538,7 @@ export function SubtitleSearchAndSyncPage() {
       <article className="panel-card span-two">
         <header className="card-header">
           <h2>统一字幕搜索</h2>
-          <span>同一关键词同时在视频轨与外录音轨里检索</span>
+          <span>同一关键词同时在视频整轨与音频整轨里检索，确定一组锚点后可批量作用到整轨</span>
         </header>
         <form className="inline-form" onSubmit={handleSearch}>
           <input

@@ -86,7 +86,7 @@ export function SubtitleMatchBoard({
           disabled={!selectedVideoSubtitleId || !selectedAudioSubtitleId || isAligning}
           onClick={onAlign}
         >
-          {isAligning ? "计算中..." : "一键对齐"}
+          {isAligning ? "计算中..." : "整轨一键对齐"}
         </button>
         <span className="offset-pill">
           最近 offset: {lastOffsetMs === null ? "尚未计算" : `${lastOffsetMs} ms`}

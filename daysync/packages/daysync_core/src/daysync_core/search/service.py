@@ -7,6 +7,35 @@ from daysync_core.subtitles.normalize import normalize_subtitle_text
 
 def search_subtitles(connection: sqlite3.Connection, project_id: str, query: str, limit: int = 20) -> dict[str, object]:
     normalized_query = normalize_subtitle_text(query)
+    return {
+        "query": query,
+        "video_results": _search_track_subtitles(
+            connection,
+            project_id,
+            "video_ref",
+            normalized_query,
+            query,
+            limit,
+        ),
+        "audio_results": _search_track_subtitles(
+            connection,
+            project_id,
+            "external_audio",
+            normalized_query,
+            query,
+            limit,
+        ),
+    }
+
+
+def _search_track_subtitles(
+    connection: sqlite3.Connection,
+    project_id: str,
+    track_type: str,
+    normalized_query: str,
+    query: str,
+    limit: int,
+) -> list[dict[str, object]]:
     rows = []
     if normalized_query or query:
         try:
@@ -21,11 +50,12 @@ def search_subtitles(connection: sqlite3.Connection, project_id: str, query: str
                 JOIN subtitle_tracks st ON st.id = s.track_id
                 LEFT JOIN media_files mf ON mf.id = s.source_media_file_id
                 WHERE st.project_id = ?
+                  AND st.track_type = ?
                   AND subtitles_fts MATCH ?
                 ORDER BY bm25(subtitles_fts), s.flat_start_ms
                 LIMIT ?
                 """,
-                (project_id, normalized_query or query, limit),
+                (project_id, track_type, normalized_query or query, limit),
             ).fetchall()
         except sqlite3.OperationalError:
             rows = []
@@ -41,16 +71,12 @@ def search_subtitles(connection: sqlite3.Connection, project_id: str, query: str
             JOIN subtitle_tracks st ON st.id = s.track_id
             LEFT JOIN media_files mf ON mf.id = s.source_media_file_id
             WHERE st.project_id = ?
+              AND st.track_type = ?
               AND (s.normalized_text LIKE ? OR s.raw_text LIKE ?)
             ORDER BY s.flat_start_ms
             LIMIT ?
             """,
-            (project_id, f"%{normalized_query}%", f"%{query}%", limit),
+            (project_id, track_type, f"%{normalized_query}%", f"%{query}%", limit),
         ).fetchall()
 
-    results = [dict(row) for row in rows]
-    return {
-        "query": query,
-        "video_results": [row for row in results if row["track_type"] == "video_ref"],
-        "audio_results": [row for row in results if row["track_type"] == "external_audio"],
-    }
+    return [dict(row) for row in rows]

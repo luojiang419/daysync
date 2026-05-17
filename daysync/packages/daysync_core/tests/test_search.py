@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import uuid4
 
 from daysync_core.media import import_media, parse_ffprobe_payload
 from daysync_core.search import search_subtitles
 from daysync_core.subtitles import import_srt
 from daysync_core.timeline import generate_flat_timeline
+from daysync_core.utils import utc_now_iso
 
 
 def test_search_subtitles_grouped(
@@ -80,3 +82,100 @@ def test_search_subtitles_limit(
     )
     result = search_subtitles(connection, project["id"], "这里", 1)
     assert len(result["video_results"]) == 1
+
+
+def test_search_subtitles_limit_applies_independently_per_track(
+    project_workspace: tuple[dict[str, object], object]
+) -> None:
+    project, connection = project_workspace
+    now = utc_now_iso()
+    video_timeline_id = str(uuid4())
+    audio_timeline_id = str(uuid4())
+    video_track_id = str(uuid4())
+    audio_track_id = str(uuid4())
+    connection.execute(
+        """
+        INSERT INTO flat_timelines (id, project_id, media_type, name, gap_ms, sort_mode, created_at)
+        VALUES (?, ?, 'video', 'video_flat_timeline', 1000, 'filename', ?)
+        """,
+        (video_timeline_id, project["id"], now),
+    )
+    connection.execute(
+        """
+        INSERT INTO flat_timelines (id, project_id, media_type, name, gap_ms, sort_mode, created_at)
+        VALUES (?, ?, 'audio', 'audio_flat_timeline', 1000, 'filename', ?)
+        """,
+        (audio_timeline_id, project["id"], now),
+    )
+    connection.execute(
+        """
+        INSERT INTO subtitle_tracks (
+          id, project_id, flat_timeline_id, track_type, source_type, language, original_path, created_at
+        )
+        VALUES (?, ?, ?, 'video_ref', 'srt_import', 'zh-CN', '', ?)
+        """,
+        (video_track_id, project["id"], video_timeline_id, now),
+    )
+    connection.execute(
+        """
+        INSERT INTO subtitle_tracks (
+          id, project_id, flat_timeline_id, track_type, source_type, language, original_path, created_at
+        )
+        VALUES (?, ?, ?, 'external_audio', 'srt_import', 'zh-CN', '', ?)
+        """,
+        (audio_track_id, project["id"], audio_timeline_id, now),
+    )
+
+    for index in range(25):
+        connection.execute(
+            """
+            INSERT INTO subtitles (
+              id, track_id, subtitle_index, flat_start_ms, flat_end_ms,
+              source_media_file_id, source_start_ms, source_end_ms,
+              raw_text, normalized_text, mapping_status, mapping_warning, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'ok', NULL, ?)
+            """,
+            (
+                str(uuid4()),
+                audio_track_id,
+                index + 1,
+                index * 1000,
+                index * 1000 + 500,
+                index * 1000,
+                index * 1000 + 500,
+                "我们到了这里",
+                "我们到了这里",
+                now,
+            ),
+        )
+
+    for index in range(5):
+        connection.execute(
+            """
+            INSERT INTO subtitles (
+              id, track_id, subtitle_index, flat_start_ms, flat_end_ms,
+              source_media_file_id, source_start_ms, source_end_ms,
+              raw_text, normalized_text, mapping_status, mapping_warning, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'ok', NULL, ?)
+            """,
+            (
+                str(uuid4()),
+                video_track_id,
+                index + 1,
+                100_000 + index * 1000,
+                100_000 + index * 1000 + 500,
+                100_000 + index * 1000,
+                100_000 + index * 1000 + 500,
+                "我们到了这里",
+                "我们到了这里",
+                now,
+            ),
+        )
+    connection.commit()
+
+    result = search_subtitles(connection, project["id"], "我们到了这里", 20)
+
+    assert len(result["audio_results"]) == 20
+    assert len(result["video_results"]) == 5

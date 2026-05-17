@@ -189,35 +189,35 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
         json={"output_path": str(tmp_path / "exports" / "sync_report.csv")},
     )
     assert export_response.status_code == 200
-    assert export_response.json()["row_count"] == 2
+    assert export_response.json()["row_count"] == 3
 
     export_xml_response = client.post(
         f"/api/projects/{project_id}/exports/fcp7-xml",
         json={"output_path": str(tmp_path / "exports" / "sync_report_fcp7.xml")},
     )
     assert export_xml_response.status_code == 200
-    assert export_xml_response.json()["sequence_count"] == 2
+    assert export_xml_response.json()["sequence_count"] == 3
 
     export_json_response = client.post(
         f"/api/projects/{project_id}/exports/json",
         json={"output_path": str(tmp_path / "exports" / "sync_report.json")},
     )
     assert export_json_response.status_code == 200
-    assert export_json_response.json()["item_count"] == 2
+    assert export_json_response.json()["item_count"] == 3
 
     export_otio_response = client.post(
         f"/api/projects/{project_id}/exports/otio",
         json={"output_path": str(tmp_path / "exports" / "sync_report.otio")},
     )
     assert export_otio_response.status_code == 200
-    assert export_otio_response.json()["item_count"] == 2
+    assert export_otio_response.json()["item_count"] == 3
 
     export_fcpxml_response = client.post(
         f"/api/projects/{project_id}/exports/fcpxml",
         json={"output_path": str(tmp_path / "exports" / "sync_report.fcpxml")},
     )
     assert export_fcpxml_response.status_code == 200
-    assert export_fcpxml_response.json()["project_count"] == 2
+    assert export_fcpxml_response.json()["project_count"] == 3
 
     export_jobs_response = client.get(f"/api/projects/{project_id}/exports/jobs")
     assert export_jobs_response.status_code == 200

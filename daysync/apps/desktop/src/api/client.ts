@@ -42,6 +42,11 @@ type HealthResponse = {
 type ImportMediaResponse = {
   imported: MediaFile[];
   failed: Array<{ path: string; code: string; message: string }>;
+  generated_timelines?: Array<{
+    media_type: "video" | "audio";
+    flat_timeline_id: string;
+    items: FlatTimeline["items"];
+  }>;
 };
 
 type FlatTimelineResponse = {
@@ -58,6 +63,8 @@ type ImportSubtitlesResponse = {
 
 type SyncResponse = {
   sync_result: SyncResult;
+  generated_count: number;
+  track_offset_ms: number;
 };
 
 type AutoCandidateApiResponse = AutoCandidateResponse;

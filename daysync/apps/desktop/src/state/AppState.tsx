@@ -127,7 +127,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         lastOffsetMs: action.payload.offset_ms,
       };
     case "SET_SYNC_RESULTS":
-      return { ...state, syncResults: action.payload };
+      return {
+        ...state,
+        syncResults: action.payload,
+        lastOffsetMs: action.payload[0]?.offset_ms ?? state.lastOffsetMs,
+      };
     default:
       return state;
   }

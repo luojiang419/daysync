@@ -6,7 +6,7 @@ import { useAppState } from "../state/AppState";
 const NAV_ITEMS = [
   { to: "/", label: "项目" },
   { to: "/media", label: "媒体导入" },
-  { to: "/timeline", label: "平铺时间线" },
+  { to: "/timeline", label: "时间线轨道" },
   { to: "/subtitles", label: "字幕同步" },
   { to: "/export", label: "导出" },
 ];

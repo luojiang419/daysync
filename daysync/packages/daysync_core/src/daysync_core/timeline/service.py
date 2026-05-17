@@ -103,6 +103,37 @@ def generate_flat_timeline(
     return {"flat_timeline_id": timeline_id, "items": items}
 
 
+def generate_flat_timeline_for_project_media(
+    connection: sqlite3.Connection,
+    project_id: str,
+    media_type: str,
+    sort_mode: str = "filename",
+    gap_ms: int = 1000,
+) -> dict[str, object] | None:
+    media_file_ids = [
+        row["id"]
+        for row in connection.execute(
+            """
+            SELECT id
+            FROM media_files
+            WHERE project_id = ? AND media_type = ?
+            ORDER BY filename
+            """,
+            (project_id, media_type),
+        ).fetchall()
+    ]
+    if not media_file_ids:
+        return None
+    return generate_flat_timeline(
+        connection,
+        project_id,
+        media_type,
+        media_file_ids,
+        sort_mode,
+        gap_ms,
+    )
+
+
 def map_flat_to_source(
     items: list[dict[str, object]], flat_start_ms: int, flat_end_ms: int | None = None
 ) -> dict[str, object]:

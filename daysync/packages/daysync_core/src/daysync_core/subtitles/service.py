@@ -38,6 +38,13 @@ def import_srt(
         )
 
     parsed = parse_srt(srt_path.read_text(encoding="utf-8"))
+    connection.execute(
+        """
+        DELETE FROM subtitle_tracks
+        WHERE project_id = ? AND track_type = ?
+        """,
+        (project_id, track_type),
+    )
     track_id = new_uuid()
     created_at = utc_now_iso()
     connection.execute(
