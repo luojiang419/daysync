@@ -2,16 +2,18 @@ import { type FormEvent, useState } from "react";
 
 import { ApiError, createProject, openProject } from "../api/client";
 import { chooseDirectory } from "../api/tauri";
+import { loadLastProjectRoot, saveLastProjectRoot } from "../project-persistence";
 import { useAppState } from "../state/AppState";
 
 export function ProjectHomePage() {
   const { state, dispatch } = useAppState();
+  const rememberedRoot = loadLastProjectRoot();
   const [createForm, setCreateForm] = useState({
     name: "",
-    rootPath: "",
+    rootPath: rememberedRoot,
     shootingDate: "",
   });
-  const [openPath, setOpenPath] = useState("");
+  const [openPath, setOpenPath] = useState(rememberedRoot);
   const [busyAction, setBusyAction] = useState<"create" | "open" | null>(null);
 
   async function pickCreateDirectory() {
@@ -38,10 +40,11 @@ export function ProjectHomePage() {
         root_path: createForm.rootPath,
         shooting_date: createForm.shootingDate || undefined,
       });
+      saveLastProjectRoot(snapshot.project.root_path);
       dispatch({ type: "HYDRATE_PROJECT", payload: snapshot });
       dispatch({
         type: "SET_NOTICE",
-        payload: { tone: "success", message: "项目已创建并载入工作台。" },
+        payload: { tone: "success", message: "项目已创建并载入工作台，后续会自动恢复这个目录。" },
       });
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "创建项目失败。";
@@ -57,10 +60,11 @@ export function ProjectHomePage() {
     dispatch({ type: "SET_NOTICE", payload: null });
     try {
       const snapshot = await openProject(openPath);
+      saveLastProjectRoot(snapshot.project.root_path);
       dispatch({ type: "HYDRATE_PROJECT", payload: snapshot });
       dispatch({
         type: "SET_NOTICE",
-        payload: { tone: "success", message: "项目已重新打开。" },
+        payload: { tone: "success", message: "项目已重新打开，后续会自动恢复这个目录。" },
       });
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "打开项目失败。";
@@ -151,7 +155,7 @@ export function ProjectHomePage() {
       <article className="panel-card">
         <header className="card-header">
           <h3>打开已有项目</h3>
-          <span>从 `daysync.project.json` 重新恢复工作区</span>
+          <span>从 `daysync.project.json` 重新恢复工作区，并记住这个目录</span>
         </header>
         <form className="form-stack" onSubmit={handleOpenProject}>
           <label>

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from daysync_core.errors import DaySyncError
@@ -30,6 +31,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DaySync API", version="0.1.0", lifespan=lifespan)
 app.state.runtime = AppState()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:1420",
+        "http://localhost:1420",
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(DaySyncError)

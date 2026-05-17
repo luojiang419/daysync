@@ -1,13 +1,14 @@
 import { useEffect } from "react";
 import { createHashRouter, RouterProvider } from "react-router-dom";
 
-import { checkHealth } from "./api/client";
+import { checkHealth, openProject } from "./api/client";
 import { ensureDevApi } from "./api/tauri";
 import { AppShell } from "./components/AppShell";
 import { ExportPage } from "./pages/ExportPage";
 import { FlatTimelinePage } from "./pages/FlatTimelinePage";
 import { MediaImportPage } from "./pages/MediaImportPage";
 import { ProjectHomePage } from "./pages/ProjectHomePage";
+import { clearLastProjectRoot, loadLastProjectRoot } from "./project-persistence";
 import { SubtitleSearchAndSyncPage } from "./pages/SubtitleSearchAndSyncPage";
 import { useAppState } from "./state/AppState";
 
@@ -48,6 +49,17 @@ function App() {
           const health = await checkHealth();
           if (cancelled) {
             return;
+          }
+          const lastProjectRoot = loadLastProjectRoot();
+          if (lastProjectRoot) {
+            try {
+              const snapshot = await openProject(lastProjectRoot);
+              if (!cancelled) {
+                dispatch({ type: "HYDRATE_PROJECT", payload: snapshot });
+              }
+            } catch {
+              clearLastProjectRoot();
+            }
           }
           const ffmpegMessage = health.ffmpeg.ready
             ? `FFmpeg ${health.ffmpeg.version ?? "unknown"} · ${health.ffmpeg.source ?? "unknown"}`
