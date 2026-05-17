@@ -8,6 +8,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from daysync_core.errors import DaySyncError
+from daysync_core.studio import get_studio_timeline_snapshot
 from daysync_core.utils import new_uuid, utc_now_iso
 
 
@@ -144,10 +145,10 @@ def export_sync_report_otio(connection: sqlite3.Connection, project_id: str, out
         """,
         (export_job_id, project_id, str(target), created_at),
     )
-    rows = _load_rich_sync_export_rows(connection, project_id)
+    segments = _load_continuous_export_segments(connection, project_id)
 
     try:
-        otio_payload = _build_otio_timeline(connection, project_id, rows, created_at)
+        otio_payload = _build_otio_timeline(connection, project_id, segments, created_at)
         target.write_text(json.dumps(otio_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as exc:
         connection.execute(
@@ -167,10 +168,10 @@ def export_sync_report_otio(connection: sqlite3.Connection, project_id: str, out
         SET status = 'succeeded', row_count = ?, completed_at = ?
         WHERE id = ?
         """,
-        (len(rows), utc_now_iso(), export_job_id),
+        (len(segments), utc_now_iso(), export_job_id),
     )
     connection.commit()
-    return {"output_path": str(target), "item_count": len(rows)}
+    return {"output_path": str(target), "item_count": len(segments)}
 
 
 def export_sync_report_fcpxml(connection: sqlite3.Connection, project_id: str, output_path: str) -> dict[str, object]:
@@ -185,10 +186,10 @@ def export_sync_report_fcpxml(connection: sqlite3.Connection, project_id: str, o
         """,
         (export_job_id, project_id, str(target), created_at),
     )
-    rows = _load_rich_sync_export_rows(connection, project_id)
+    segments = _load_continuous_export_segments(connection, project_id)
 
     try:
-        fcpxml_content = _build_fcpxml(connection, project_id, rows)
+        fcpxml_content = _build_fcpxml(connection, project_id, segments)
         target.write_text(fcpxml_content, encoding="utf-8")
     except OSError as exc:
         connection.execute(
@@ -208,10 +209,10 @@ def export_sync_report_fcpxml(connection: sqlite3.Connection, project_id: str, o
         SET status = 'succeeded', row_count = ?, completed_at = ?
         WHERE id = ?
         """,
-        (len(rows), utc_now_iso(), export_job_id),
+        (_project_count_for_segments(segments), utc_now_iso(), export_job_id),
     )
     connection.commit()
-    return {"output_path": str(target), "project_count": len(rows)}
+    return {"output_path": str(target), "project_count": _project_count_for_segments(segments)}
 
 
 def export_sync_report_fcp7_xml(
@@ -228,10 +229,10 @@ def export_sync_report_fcp7_xml(
         """,
         (export_job_id, project_id, str(target), created_at),
     )
-    rows = _load_rich_sync_export_rows(connection, project_id)
+    segments = _load_continuous_export_segments(connection, project_id)
 
     try:
-        xml_content = _build_fcp7_xml(connection, project_id, rows)
+        xml_content = _build_fcp7_xml(connection, project_id, segments)
         target.write_text(xml_content, encoding="utf-8")
     except OSError as exc:
         connection.execute(
@@ -251,10 +252,10 @@ def export_sync_report_fcp7_xml(
         SET status = 'succeeded', row_count = ?, completed_at = ?
         WHERE id = ?
         """,
-        (len(rows), utc_now_iso(), export_job_id),
+        (_sequence_count_for_segments(segments), utc_now_iso(), export_job_id),
     )
     connection.commit()
-    return {"output_path": str(target), "sequence_count": len(rows)}
+    return {"output_path": str(target), "sequence_count": _sequence_count_for_segments(segments)}
 
 
 def _load_sync_export_rows(connection: sqlite3.Connection, project_id: str) -> list[sqlite3.Row]:
@@ -301,25 +302,96 @@ def _load_rich_sync_export_rows(connection: sqlite3.Connection, project_id: str)
     ).fetchall()
 
 
-def _build_fcpxml(connection: sqlite3.Connection, project_id: str, rows: list[sqlite3.Row]) -> str:
+def _load_continuous_export_segments(
+    connection: sqlite3.Connection,
+    project_id: str,
+) -> list[dict[str, object]]:
+    snapshot = get_studio_timeline_snapshot(connection, project_id)
+    sync_segments = snapshot["sync_segments"]
+    if not sync_segments:
+        return []
+
+    sync_result_rows = connection.execute(
+        """
+        SELECT sr.id, sr.confidence_score, sr.status, sr.source, sr.created_at, sr.updated_at,
+               vs.raw_text AS video_anchor_text, aus.raw_text AS audio_anchor_text
+        FROM sync_results sr
+        LEFT JOIN subtitles vs ON vs.id = sr.video_anchor_subtitle_id
+        LEFT JOIN subtitles aus ON aus.id = sr.audio_anchor_subtitle_id
+        WHERE sr.id IN ({placeholders})
+        """.format(placeholders=",".join("?" for _ in sync_segments)),
+        [segment["sync_result_id"] for segment in sync_segments],
+    ).fetchall()
+    sync_result_by_id = {row["id"]: dict(row) for row in sync_result_rows}
+
+    media_ids = sorted(
+        {
+            *[segment["video_media_file_id"] for segment in sync_segments],
+            *[segment["audio_media_file_id"] for segment in sync_segments],
+        }
+    )
+    media_rows = connection.execute(
+        """
+        SELECT id, duration_ms, has_video, has_audio, filename, original_path
+        FROM media_files
+        WHERE id IN ({placeholders})
+        """.format(placeholders=",".join("?" for _ in media_ids)),
+        media_ids,
+    ).fetchall()
+    media_by_id = {row["id"]: dict(row) for row in media_rows}
+
+    segments: list[dict[str, object]] = []
+    for segment in sync_segments:
+        sync_result = sync_result_by_id[segment["sync_result_id"]]
+        video_media = media_by_id[segment["video_media_file_id"]]
+        audio_media = media_by_id[segment["audio_media_file_id"]]
+        timeline_start_ms = int(segment["video_flat_start_ms"])
+        timeline_end_ms = int(segment["video_flat_end_ms"])
+        segments.append(
+            {
+                **segment,
+                "confidence_score": sync_result["confidence_score"],
+                "status": sync_result["status"],
+                "source": sync_result["source"],
+                "video_anchor_text": sync_result["video_anchor_text"],
+                "audio_anchor_text": sync_result["audio_anchor_text"],
+                "created_at": sync_result["created_at"],
+                "updated_at": sync_result["updated_at"],
+                "timeline_start_ms": timeline_start_ms,
+                "timeline_end_ms": timeline_end_ms,
+                "timeline_duration_ms": timeline_end_ms - timeline_start_ms,
+                "video_duration_ms": int(video_media["duration_ms"]),
+                "video_has_video": int(video_media["has_video"]),
+                "video_has_audio": int(video_media["has_audio"]),
+                "video_file": video_media["filename"],
+                "video_path": video_media["original_path"],
+                "audio_duration_ms": int(audio_media["duration_ms"]),
+                "audio_has_video": int(audio_media["has_video"]),
+                "audio_has_audio": int(audio_media["has_audio"]),
+                "audio_file": audio_media["filename"],
+                "audio_path": audio_media["original_path"],
+            }
+        )
+    return sorted(
+        segments,
+        key=lambda item: (item["timeline_start_ms"], item["timeline_end_ms"], item["sync_result_id"]),
+    )
+
+
+def _build_fcpxml(connection: sqlite3.Connection, project_id: str, segments: list[dict[str, object]]) -> str:
     root = ET.Element("fcpxml", version="1.10")
     resources = ET.SubElement(root, "resources")
     audio_format_id = "r_audio_format"
     ET.SubElement(resources, "format", id=audio_format_id, name="FFFrameRateUndefined")
     event = ET.SubElement(root, "event", name=f"DaySync Export {project_id}")
 
-    for index, row in enumerate(rows, start=1):
-        video_format_id = f"r_video_format_{index}"
-        video_asset_id = f"r_video_asset_{index}"
-        audio_asset_id = f"r_audio_asset_{index}"
-        rate_num, rate_den = _load_video_rate_info(connection, row["video_media_file_id"])
-        video_stream = _load_video_stream(connection, row["video_media_file_id"])
-        video_audio_stream = _load_audio_stream(connection, row["video_media_file_id"])
-        audio_stream = _load_audio_stream(connection, row["audio_media_file_id"])
-        frame_rate = rate_num / rate_den if rate_den else 25.0
-
+    if segments:
+        first_segment = segments[0]
+        rate_num, rate_den = _load_video_rate_info(connection, first_segment["video_media_file_id"])
+        video_stream = _load_video_stream(connection, first_segment["video_media_file_id"])
+        sequence_format_id = "r_video_format_main"
         format_attrs = {
-            "id": video_format_id,
+            "id": sequence_format_id,
             "frameDuration": _rate_to_fcpx_time(rate_num, rate_den),
             "width": str(video_stream.get("width", 1920)),
             "height": str(video_stream.get("height", 1080)),
@@ -334,189 +406,140 @@ def _build_fcpxml(connection: sqlite3.Connection, project_id: str, rows: list[sq
         if predefined_name:
             format_attrs["name"] = predefined_name
         ET.SubElement(resources, "format", **format_attrs)
-
-        video_asset = ET.SubElement(
-            resources,
-            "asset",
-            id=video_asset_id,
-            name=row["video_file"],
-            start="0s",
-            duration=_ms_to_fcpx_time(row["video_duration_ms"]),
-            hasVideo="1" if row["video_has_video"] else "0",
-            hasAudio="1" if row["video_has_audio"] else "0",
-            format=video_format_id,
-            audioSources="1",
-            audioChannels=str(video_audio_stream.get("channels", 2)),
-            audioRate=str(video_audio_stream.get("sample_rate", 48000)),
+        asset_maps = _append_fcpxml_assets(
+            connection=connection,
+            resources=resources,
+            segments=segments,
+            sequence_format_id=sequence_format_id,
+            audio_format_id=audio_format_id,
         )
-        ET.SubElement(video_asset, "media-rep", kind="original-media", src=Path(row["video_path"]).as_uri())
-
-        audio_asset = ET.SubElement(
-            resources,
-            "asset",
-            id=audio_asset_id,
-            name=row["audio_file"],
-            start="0s",
-            duration=_ms_to_fcpx_time(row["audio_duration_ms"]),
-            hasVideo="1" if row["audio_has_video"] else "0",
-            hasAudio="1" if row["audio_has_audio"] else "0",
-            format=audio_format_id,
-            audioSources="1",
-            audioChannels=str(audio_stream.get("channels", 2)),
-            audioRate=str(audio_stream.get("sample_rate", 48000)),
-        )
-        ET.SubElement(audio_asset, "media-rep", kind="original-media", src=Path(row["audio_path"]).as_uri())
 
         project = ET.SubElement(
             event,
             "project",
-            name=f"{row['video_file']}__{row['audio_file']}",
-            id=f"project_{index}",
+            name=f"DaySync Synced Timeline {project_id}",
+            id="project_main",
         )
-        sequence_layout = _build_sequence_layout_ms(row)
+        sequence_duration_ms = max(int(segment["timeline_end_ms"]) for segment in segments)
         sequence = ET.SubElement(
             project,
             "sequence",
-            format=video_format_id,
-            duration=_ms_to_fcpx_time(sequence_layout["sequence_duration_ms"]),
+            format=sequence_format_id,
+            duration=_ms_to_fcpx_time(sequence_duration_ms),
             tcStart="0s",
             tcFormat="NDF",
         )
         spine = ET.SubElement(sequence, "spine")
-        primary_kind = "video" if sequence_layout["video_timeline_start_ms"] <= sequence_layout["audio_timeline_start_ms"] else "audio"
-        _append_fcpxml_sync_pair(
-            spine=spine,
-            row=row,
-            primary_kind=primary_kind,
-            video_asset_id=video_asset_id,
-            audio_asset_id=audio_asset_id,
-            sequence_layout=sequence_layout,
-            video_role="video",
-            audio_role="dialogue",
-        )
+        for segment in segments:
+            _append_fcpxml_continuous_pair(
+                spine=spine,
+                segment=segment,
+                video_asset_id=asset_maps["video"][segment["video_media_file_id"]],
+                audio_asset_id=asset_maps["audio"][segment["audio_media_file_id"]],
+                video_role="video",
+                audio_role="dialogue",
+            )
 
     xml_body = ET.tostring(root, encoding="unicode")
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n{xml_body}\n'
 
 
-def _append_fcpxml_sync_pair(
+def _append_fcpxml_assets(
+    *,
+    connection: sqlite3.Connection,
+    resources: ET.Element,
+    segments: list[dict[str, object]],
+    sequence_format_id: str,
+    audio_format_id: str,
+) -> dict[str, dict[str, str]]:
+    video_asset_ids: dict[str, str] = {}
+    audio_asset_ids: dict[str, str] = {}
+    for index, media_file_id in enumerate(_ordered_unique_ids(segments, "video_media_file_id"), start=1):
+        segment = next(item for item in segments if item["video_media_file_id"] == media_file_id)
+        video_audio_stream = _load_audio_stream(connection, media_file_id)
+        video_asset_id = f"r_video_asset_{index}"
+        video_asset_ids[media_file_id] = video_asset_id
+        video_asset = ET.SubElement(
+            resources,
+            "asset",
+            id=video_asset_id,
+            name=segment["video_file"],
+            start="0s",
+            duration=_ms_to_fcpx_time(segment["video_duration_ms"]),
+            hasVideo="1" if segment["video_has_video"] else "0",
+            hasAudio="1" if segment["video_has_audio"] else "0",
+            format=sequence_format_id,
+            audioSources="1",
+            audioChannels=str(video_audio_stream.get("channels", 2)),
+            audioRate=str(video_audio_stream.get("sample_rate", 48000)),
+        )
+        ET.SubElement(video_asset, "media-rep", kind="original-media", src=Path(segment["video_path"]).as_uri())
+
+    for index, media_file_id in enumerate(_ordered_unique_ids(segments, "audio_media_file_id"), start=1):
+        segment = next(item for item in segments if item["audio_media_file_id"] == media_file_id)
+        audio_stream = _load_audio_stream(connection, media_file_id)
+        audio_asset_id = f"r_audio_asset_{index}"
+        audio_asset_ids[media_file_id] = audio_asset_id
+        audio_asset = ET.SubElement(
+            resources,
+            "asset",
+            id=audio_asset_id,
+            name=segment["audio_file"],
+            start="0s",
+            duration=_ms_to_fcpx_time(segment["audio_duration_ms"]),
+            hasVideo="1" if segment["audio_has_video"] else "0",
+            hasAudio="1" if segment["audio_has_audio"] else "0",
+            format=audio_format_id,
+            audioSources="1",
+            audioChannels=str(audio_stream.get("channels", 2)),
+            audioRate=str(audio_stream.get("sample_rate", 48000)),
+        )
+        ET.SubElement(audio_asset, "media-rep", kind="original-media", src=Path(segment["audio_path"]).as_uri())
+
+    return {"video": video_asset_ids, "audio": audio_asset_ids}
+
+
+def _append_fcpxml_continuous_pair(
     *,
     spine: ET.Element,
-    row: sqlite3.Row,
-    primary_kind: str,
+    segment: dict[str, object],
     video_asset_id: str,
     audio_asset_id: str,
-    sequence_layout: dict[str, int],
     video_role: str,
     audio_role: str,
 ) -> None:
-    video_duration_ms = row["video_out_ms"] - row["video_in_ms"]
-    audio_duration_ms = row["audio_out_ms"] - row["audio_in_ms"]
-    if primary_kind == "video":
-        primary = ET.SubElement(
-            spine,
-            "asset-clip",
-            name=row["video_file"],
-            ref=video_asset_id,
-            offset="0s",
-            start=_ms_to_fcpx_time(row["video_in_ms"]),
-            duration=_ms_to_fcpx_time(video_duration_ms),
-            srcEnable="video",
-            videoRole=video_role,
-        )
-        ET.SubElement(
-            primary,
-            "asset-clip",
-            name=row["audio_file"],
-            ref=audio_asset_id,
-            lane="-1",
-            offset=_ms_to_fcpx_time(sequence_layout["audio_timeline_start_ms"]),
-            start=_ms_to_fcpx_time(row["audio_in_ms"]),
-            duration=_ms_to_fcpx_time(audio_duration_ms),
-            srcEnable="audio",
-            audioRole=audio_role,
-        )
-    else:
-        primary = ET.SubElement(
-            spine,
-            "asset-clip",
-            name=row["audio_file"],
-            ref=audio_asset_id,
-            offset="0s",
-            start=_ms_to_fcpx_time(row["audio_in_ms"]),
-            duration=_ms_to_fcpx_time(audio_duration_ms),
-            srcEnable="audio",
-            audioRole=audio_role,
-        )
-        ET.SubElement(
-            primary,
-            "asset-clip",
-            name=row["video_file"],
-            ref=video_asset_id,
-            lane="1",
-            offset=_ms_to_fcpx_time(sequence_layout["video_timeline_start_ms"]),
-            start=_ms_to_fcpx_time(row["video_in_ms"]),
-            duration=_ms_to_fcpx_time(video_duration_ms),
-            srcEnable="video",
-            videoRole=video_role,
-        )
+    duration_ms = int(segment["timeline_duration_ms"])
+    primary = ET.SubElement(
+        spine,
+        "asset-clip",
+        name=segment["video_file"],
+        ref=video_asset_id,
+        offset=_ms_to_fcpx_time(segment["timeline_start_ms"]),
+        start=_ms_to_fcpx_time(segment["video_in_ms"]),
+        duration=_ms_to_fcpx_time(duration_ms),
+        srcEnable="video",
+        videoRole=video_role,
+    )
+    ET.SubElement(
+        primary,
+        "asset-clip",
+        name=segment["audio_file"],
+        ref=audio_asset_id,
+        lane="-1",
+        offset="0s",
+        start=_ms_to_fcpx_time(segment["audio_in_ms"]),
+        duration=_ms_to_fcpx_time(duration_ms),
+        srcEnable="audio",
+        audioRole=audio_role,
+    )
 
 
 def _build_otio_timeline(
-    connection: sqlite3.Connection, project_id: str, rows: list[sqlite3.Row], exported_at: str
+    connection: sqlite3.Connection, project_id: str, segments: list[dict[str, object]], exported_at: str
 ) -> dict[str, object]:
-    master_rate = _load_master_rate(connection, rows)
-    video_children: list[dict[str, object]] = []
-    audio_children: list[dict[str, object]] = []
-
-    for row in rows:
-        layout = _build_sequence_layout_ms(row)
-        video_metadata = _build_otio_clip_metadata(row, "video")
-        audio_metadata = _build_otio_clip_metadata(row, "audio")
-
-        if layout["video_timeline_start_ms"] > 0:
-            video_children.append(_build_otio_gap(layout["video_timeline_start_ms"], master_rate, "video-gap"))
-        video_children.append(
-            _build_otio_clip(
-                name=row["video_file"],
-                media_path=row["video_path"],
-                media_duration_ms=row["video_duration_ms"],
-                clip_start_ms=layout["video_in_ms"],
-                clip_duration_ms=row["video_out_ms"] - row["video_in_ms"],
-                rate=master_rate,
-                metadata=video_metadata,
-            )
-        )
-        if layout["sequence_duration_ms"] > layout["video_timeline_end_ms"]:
-            video_children.append(
-                _build_otio_gap(
-                    layout["sequence_duration_ms"] - layout["video_timeline_end_ms"],
-                    master_rate,
-                    "video-trailing-gap",
-                )
-            )
-
-        if layout["audio_timeline_start_ms"] > 0:
-            audio_children.append(_build_otio_gap(layout["audio_timeline_start_ms"], master_rate, "audio-gap"))
-        audio_children.append(
-            _build_otio_clip(
-                name=row["audio_file"],
-                media_path=row["audio_path"],
-                media_duration_ms=row["audio_duration_ms"],
-                clip_start_ms=layout["audio_in_ms"],
-                clip_duration_ms=row["audio_out_ms"] - row["audio_in_ms"],
-                rate=master_rate,
-                metadata=audio_metadata,
-            )
-        )
-        if layout["sequence_duration_ms"] > layout["audio_timeline_end_ms"]:
-            audio_children.append(
-                _build_otio_gap(
-                    layout["sequence_duration_ms"] - layout["audio_timeline_end_ms"],
-                    master_rate,
-                    "audio-trailing-gap",
-                )
-            )
+    master_rate = _load_master_rate(connection, segments)
+    video_children = _build_otio_track_children(segments, master_rate, "video")
+    audio_children = _build_otio_track_children(segments, master_rate, "audio")
 
     return {
         "OTIO_SCHEMA": "Timeline.1",
@@ -526,7 +549,7 @@ def _build_otio_timeline(
             "daysync": {
                 "project_id": project_id,
                 "exported_at": exported_at,
-                "sync_result_count": len(rows),
+                "sync_result_count": len(segments),
             }
         },
         "tracks": {
@@ -566,24 +589,24 @@ def _build_otio_timeline(
 
 
 def _build_fcp7_xml(
-    connection: sqlite3.Connection, project_id: str, rows: list[sqlite3.Row]
+    connection: sqlite3.Connection, project_id: str, segments: list[dict[str, object]]
 ) -> str:
     root = ET.Element("xmeml", version="5")
     project = ET.SubElement(root, "project")
     ET.SubElement(project, "name").text = f"DaySync Export {project_id}"
     children = ET.SubElement(project, "children")
 
-    for row in rows:
-        sequence = ET.SubElement(children, "sequence", id=f"sequence-{row['sync_result_id']}")
-        _append_text(sequence, "name", f"{row['video_file']}__{row['audio_file']}")
-        video_rate = _load_video_rate(connection, row["video_media_file_id"])
+    if segments:
+        sequence = ET.SubElement(children, "sequence", id=f"sequence-{project_id}")
+        _append_text(sequence, "name", f"DaySync Synced Timeline {project_id}")
+        video_rate = _load_video_rate(connection, segments[0]["video_media_file_id"])
         timebase, ntsc_flag = _format_rate(video_rate)
         rate_node = ET.SubElement(sequence, "rate")
         _append_text(rate_node, "timebase", str(timebase))
         _append_text(rate_node, "ntsc", "TRUE" if ntsc_flag else "FALSE")
 
-        layout = _build_sequence_layout(row, video_rate)
-        _append_text(sequence, "duration", str(layout["sequence_duration_frames"]))
+        sequence_duration_ms = max(int(segment["timeline_end_ms"]) for segment in segments)
+        _append_text(sequence, "duration", str(_ms_to_frames(sequence_duration_ms, video_rate)))
         timecode = ET.SubElement(sequence, "timecode")
         timecode_rate = ET.SubElement(timecode, "rate")
         _append_text(timecode_rate, "timebase", str(timebase))
@@ -595,51 +618,54 @@ def _build_fcp7_xml(
         media = ET.SubElement(sequence, "media")
         video = ET.SubElement(media, "video")
         track = ET.SubElement(video, "track")
-        video_clip_id = f"{row['sync_result_id']}-video"
-        audio_clip_id = f"{row['sync_result_id']}-audio"
-        video_clipitem = ET.SubElement(track, "clipitem", id=video_clip_id)
-        _append_text(video_clipitem, "name", row["video_file"])
-        _append_text(video_clipitem, "duration", str(_ms_to_frames(row["video_duration_ms"], video_rate)))
-        _append_text(video_clipitem, "start", str(layout["video_timeline_start_frames"]))
-        _append_text(video_clipitem, "end", str(layout["video_timeline_end_frames"]))
-        _append_text(video_clipitem, "in", str(layout["video_in_frames"]))
-        _append_text(video_clipitem, "out", str(layout["video_out_frames"]))
-        _append_link(video_clipitem, video_clip_id)
-        _append_link(video_clipitem, audio_clip_id)
-        _append_sourcetrack(video_clipitem, "video", 1)
-        _append_file_reference(
-            video_clipitem,
-            file_id=f"file-{row['sync_result_id']}-video",
-            name=row["video_file"],
-            original_path=row["video_path"],
-            duration_ms=row["video_duration_ms"],
-            rate=video_rate,
-            stream_info=_load_video_stream(connection, row["video_media_file_id"]),
-            mediatype="video",
-        )
-
         audio = ET.SubElement(media, "audio")
         audio_track = ET.SubElement(audio, "track")
-        audio_clipitem = ET.SubElement(audio_track, "clipitem", id=audio_clip_id)
-        _append_text(audio_clipitem, "name", row["audio_file"])
-        _append_text(audio_clipitem, "duration", str(_ms_to_frames(row["audio_duration_ms"], video_rate)))
-        _append_text(audio_clipitem, "start", str(layout["audio_timeline_start_frames"]))
-        _append_text(audio_clipitem, "end", str(layout["audio_timeline_end_frames"]))
-        _append_text(audio_clipitem, "in", str(layout["audio_in_frames"]))
-        _append_text(audio_clipitem, "out", str(layout["audio_out_frames"]))
-        _append_link(audio_clipitem, video_clip_id)
-        _append_link(audio_clipitem, audio_clip_id)
-        _append_sourcetrack(audio_clipitem, "audio", 1)
-        _append_file_reference(
-            audio_clipitem,
-            file_id=f"file-{row['sync_result_id']}-audio",
-            name=row["audio_file"],
-            original_path=row["audio_path"],
-            duration_ms=row["audio_duration_ms"],
-            rate=video_rate,
-            stream_info=_load_audio_stream(connection, row["audio_media_file_id"]),
-            mediatype="audio",
-        )
+        for segment in segments:
+            layout = _build_continuous_sequence_layout(segment, video_rate)
+            video_clip_id = f"{segment['sync_result_id']}-video"
+            audio_clip_id = f"{segment['sync_result_id']}-audio"
+
+            video_clipitem = ET.SubElement(track, "clipitem", id=video_clip_id)
+            _append_text(video_clipitem, "name", segment["video_file"])
+            _append_text(video_clipitem, "duration", str(_ms_to_frames(segment["video_duration_ms"], video_rate)))
+            _append_text(video_clipitem, "start", str(layout["timeline_start_frames"]))
+            _append_text(video_clipitem, "end", str(layout["timeline_end_frames"]))
+            _append_text(video_clipitem, "in", str(layout["video_in_frames"]))
+            _append_text(video_clipitem, "out", str(layout["video_out_frames"]))
+            _append_link(video_clipitem, video_clip_id)
+            _append_link(video_clipitem, audio_clip_id)
+            _append_sourcetrack(video_clipitem, "video", 1)
+            _append_file_reference(
+                video_clipitem,
+                file_id=f"file-{segment['video_media_file_id']}-video",
+                name=segment["video_file"],
+                original_path=segment["video_path"],
+                duration_ms=segment["video_duration_ms"],
+                rate=video_rate,
+                stream_info=_load_video_stream(connection, segment["video_media_file_id"]),
+                mediatype="video",
+            )
+
+            audio_clipitem = ET.SubElement(audio_track, "clipitem", id=audio_clip_id)
+            _append_text(audio_clipitem, "name", segment["audio_file"])
+            _append_text(audio_clipitem, "duration", str(_ms_to_frames(segment["audio_duration_ms"], video_rate)))
+            _append_text(audio_clipitem, "start", str(layout["timeline_start_frames"]))
+            _append_text(audio_clipitem, "end", str(layout["timeline_end_frames"]))
+            _append_text(audio_clipitem, "in", str(layout["audio_in_frames"]))
+            _append_text(audio_clipitem, "out", str(layout["audio_out_frames"]))
+            _append_link(audio_clipitem, video_clip_id)
+            _append_link(audio_clipitem, audio_clip_id)
+            _append_sourcetrack(audio_clipitem, "audio", 1)
+            _append_file_reference(
+                audio_clipitem,
+                file_id=f"file-{segment['audio_media_file_id']}-audio",
+                name=segment["audio_file"],
+                original_path=segment["audio_path"],
+                duration_ms=segment["audio_duration_ms"],
+                rate=video_rate,
+                stream_info=_load_audio_stream(connection, segment["audio_media_file_id"]),
+                mediatype="audio",
+            )
 
     xml_body = ET.tostring(root, encoding="unicode")
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n{xml_body}\n'
@@ -773,6 +799,44 @@ def _load_master_rate(connection: sqlite3.Connection, rows: list[sqlite3.Row]) -
     if not rows:
         return 25.0
     return _load_video_rate(connection, rows[0]["video_media_file_id"])
+
+
+def _build_otio_track_children(
+    segments: list[dict[str, object]],
+    rate: float,
+    clip_role: str,
+) -> list[dict[str, object]]:
+    children: list[dict[str, object]] = []
+    cursor_ms = 0
+    for segment in segments:
+        if segment["timeline_start_ms"] > cursor_ms:
+            children.append(
+                _build_otio_gap(segment["timeline_start_ms"] - cursor_ms, rate, f"{clip_role}-gap")
+            )
+        if clip_role == "video":
+            name = segment["video_file"]
+            media_path = segment["video_path"]
+            media_duration_ms = segment["video_duration_ms"]
+            clip_start_ms = segment["video_in_ms"]
+        else:
+            name = segment["audio_file"]
+            media_path = segment["audio_path"]
+            media_duration_ms = segment["audio_duration_ms"]
+            clip_start_ms = segment["audio_in_ms"]
+
+        children.append(
+            _build_otio_clip(
+                name=name,
+                media_path=media_path,
+                media_duration_ms=media_duration_ms,
+                clip_start_ms=clip_start_ms,
+                clip_duration_ms=segment["timeline_duration_ms"],
+                rate=rate,
+                metadata=_build_otio_clip_metadata(segment, clip_role),
+            )
+        )
+        cursor_ms = segment["timeline_end_ms"]
+    return children
 
 
 def _ms_to_fcpx_time(value_ms: int | float) -> str:
@@ -930,3 +994,34 @@ def _format_rate(rate: float) -> tuple[int, bool]:
     if abs(rounded - 59.94) < 0.01:
         return 60, True
     return max(1, int(round(rate))), False
+
+
+def _build_continuous_sequence_layout(segment: dict[str, object], rate: float) -> dict[str, int]:
+    return {
+        "timeline_start_frames": _ms_to_frames(segment["timeline_start_ms"], rate),
+        "timeline_end_frames": _ms_to_frames(segment["timeline_end_ms"], rate),
+        "video_in_frames": _ms_to_frames(segment["video_in_ms"], rate),
+        "video_out_frames": _ms_to_frames(segment["video_out_ms"], rate),
+        "audio_in_frames": _ms_to_frames(segment["audio_in_ms"], rate),
+        "audio_out_frames": _ms_to_frames(segment["audio_out_ms"], rate),
+    }
+
+
+def _ordered_unique_ids(segments: list[dict[str, object]], key: str) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for segment in segments:
+        value = str(segment[key])
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _sequence_count_for_segments(segments: list[dict[str, object]]) -> int:
+    return 1 if segments else 0
+
+
+def _project_count_for_segments(segments: list[dict[str, object]]) -> int:
+    return 1 if segments else 0

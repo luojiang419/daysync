@@ -12,7 +12,10 @@ from daysync_core.export import (
     export_sync_report_otio,
     list_export_jobs,
 )
+from daysync_core.media import import_media, parse_ffprobe_payload
+from daysync_core.subtitles import import_srt
 from daysync_core.sync import create_manual_anchor_sync
+from daysync_core.timeline import generate_flat_timeline
 
 from .test_sync import _prepare_sync_fixture
 
@@ -61,7 +64,7 @@ def test_fcp7_xml_export_structure(
     assert root.tag == "xmeml"
     sequence_name = root.find("./project/children/sequence/name")
     assert sequence_name is not None
-    assert "A001_C001.mov" in sequence_name.text
+    assert "DaySync Synced Timeline" in sequence_name.text
     pathurl = root.find(".//pathurl")
     assert pathurl is not None
     assert pathurl.text.startswith("file:///")
@@ -139,6 +142,54 @@ def test_fcpxml_export_builds_project_collection(
     assert nested_clip.attrib["srcEnable"] in {"video", "audio"}
 
 
+def test_fcp7_xml_export_uses_single_sequence_for_multi_segment_track_sync(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    _prepare_multi_segment_export_fixture(project, connection, tmp_path, sample_root)
+    output_path = tmp_path / "sync_report_fcp7.xml"
+
+    result = export_sync_report_fcp7_xml(connection, project["id"], str(output_path))
+
+    assert result["sequence_count"] == 1
+    root = ET.fromstring(output_path.read_text(encoding="utf-8").split("\n", 2)[2])
+    assert len(root.findall("./project/children/sequence")) == 1
+    assert len(root.findall(".//media/video/track/clipitem")) == 2
+    assert len(root.findall(".//media/audio/track/clipitem")) == 2
+
+
+def test_fcpxml_export_uses_single_project_for_multi_segment_track_sync(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    _prepare_multi_segment_export_fixture(project, connection, tmp_path, sample_root)
+    output_path = tmp_path / "sync_report.fcpxml"
+
+    result = export_sync_report_fcpxml(connection, project["id"], str(output_path))
+
+    assert result["project_count"] == 1
+    root = ET.fromstring(output_path.read_text(encoding="utf-8").split("\n", 2)[2])
+    assert len(root.findall("./event/project")) == 1
+    assert len(root.findall("./event/project/sequence/spine/asset-clip")) == 2
+
+
+def test_otio_export_uses_continuous_track_sync_segments(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    _prepare_multi_segment_export_fixture(project, connection, tmp_path, sample_root)
+    output_path = tmp_path / "sync_report.otio"
+
+    result = export_sync_report_otio(connection, project["id"], str(output_path))
+
+    assert result["item_count"] == 2
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    video_children = payload["tracks"]["children"][0]["children"]
+    audio_children = payload["tracks"]["children"][1]["children"]
+    assert len([item for item in video_children if item["OTIO_SCHEMA"] == "Clip.2"]) == 2
+    assert len([item for item in audio_children if item["OTIO_SCHEMA"] == "Clip.2"]) == 2
+
+
 def test_list_export_jobs_returns_latest_first(
     project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
 ) -> None:
@@ -168,3 +219,119 @@ def test_list_export_jobs_returns_latest_first(
     assert jobs[3]["export_type"] == "fcp7_xml"
     assert jobs[4]["export_type"] == "csv"
     assert jobs[4]["row_count"] == 1
+
+
+def _prepare_multi_segment_export_fixture(
+    project: dict[str, object],
+    connection,
+    tmp_path: Path,
+    sample_root: Path,
+) -> None:
+    video_path_1 = sample_root / "media" / "A001_C001.mov"
+    video_path_2 = sample_root / "media" / "A001_C002.mov"
+    audio_path = sample_root / "media" / "ZOOM0001.wav"
+    video_payload_1 = json.loads((sample_root / "media" / "mock_video_001.json").read_text(encoding="utf-8"))
+    video_payload_2 = json.loads((sample_root / "media" / "mock_video_002.json").read_text(encoding="utf-8"))
+    audio_payload = json.loads((sample_root / "media" / "mock_audio_001.json").read_text(encoding="utf-8"))
+    imported = import_media(
+        connection,
+        project["id"],
+        [str(video_path_1), str(video_path_2), str(audio_path)],
+        probe_func=lambda path: parse_ffprobe_payload(
+            path,
+            video_payload_1
+            if Path(path).name == "A001_C001.mov"
+            else video_payload_2
+            if Path(path).name == "A001_C002.mov"
+            else audio_payload,
+        ),
+    )
+    video_ids = [item["id"] for item in imported["imported"] if item["media_type"] == "video"]
+    audio_ids = [item["id"] for item in imported["imported"] if item["media_type"] == "audio"]
+    video_timeline = generate_flat_timeline(connection, project["id"], "video", video_ids, "filename", 1000)
+    audio_timeline = generate_flat_timeline(connection, project["id"], "audio", audio_ids, "filename", 1000)
+
+    anchor_offset_ms = 574180
+    first_video_anchor_ms = 1000
+    second_video_anchor_ms = int(video_timeline["items"][1]["flat_start_ms"]) + 500
+    video_srt_path = tmp_path / "video_track_sync.srt"
+    video_srt_path.write_text(
+        "\n".join(
+            [
+                "1",
+                f"{_format_srt_timestamp(first_video_anchor_ms)} --> {_format_srt_timestamp(first_video_anchor_ms + 1000)}",
+                "我们到了这里",
+                "",
+                "2",
+                f"{_format_srt_timestamp(second_video_anchor_ms)} --> {_format_srt_timestamp(second_video_anchor_ms + 1000)}",
+                "继续往前走",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    audio_srt_path = tmp_path / "audio_track_sync.srt"
+    audio_srt_path.write_text(
+        "\n".join(
+            [
+                "1",
+                f"{_format_srt_timestamp(first_video_anchor_ms + anchor_offset_ms)} --> {_format_srt_timestamp(first_video_anchor_ms + anchor_offset_ms + 1000)}",
+                "我们到了这里",
+                "",
+                "2",
+                f"{_format_srt_timestamp(second_video_anchor_ms + anchor_offset_ms)} --> {_format_srt_timestamp(second_video_anchor_ms + anchor_offset_ms + 1000)}",
+                "继续往前走",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    import_srt(
+        connection,
+        project["id"],
+        video_timeline["flat_timeline_id"],
+        "video_ref",
+        "srt_import",
+        str(video_srt_path),
+        "zh-CN",
+    )
+    import_srt(
+        connection,
+        project["id"],
+        audio_timeline["flat_timeline_id"],
+        "external_audio",
+        "srt_import",
+        str(audio_srt_path),
+        "zh-CN",
+    )
+
+    subtitle_rows = connection.execute(
+        """
+        SELECT s.id, st.track_type, s.subtitle_index
+        FROM subtitles s
+        JOIN subtitle_tracks st ON st.id = s.track_id
+        WHERE st.project_id = ?
+        ORDER BY st.track_type, s.subtitle_index
+        """,
+        (project["id"],),
+    ).fetchall()
+    video_subtitle_id = next(
+        row["id"]
+        for row in subtitle_rows
+        if row["track_type"] == "video_ref" and row["subtitle_index"] == 1
+    )
+    audio_subtitle_id = next(
+        row["id"]
+        for row in subtitle_rows
+        if row["track_type"] == "external_audio" and row["subtitle_index"] == 1
+    )
+    create_manual_anchor_sync(connection, project["id"], video_subtitle_id, audio_subtitle_id)
+
+
+def _format_srt_timestamp(value_ms: int) -> str:
+    hours = value_ms // 3_600_000
+    minutes = (value_ms % 3_600_000) // 60_000
+    seconds = (value_ms % 60_000) // 1_000
+    milliseconds = value_ms % 1_000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
