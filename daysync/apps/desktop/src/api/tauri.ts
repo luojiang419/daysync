@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { DragDropEvent } from "@tauri-apps/api/webview";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 
 declare global {
@@ -43,4 +45,15 @@ export async function chooseSubtitleFile(): Promise<string | null> {
   }
   const result = await open({ directory: false, multiple: false, filters: [{ name: "Subtitles", extensions: ["srt"] }] });
   return Array.isArray(result) ? (result[0] ?? null) : result;
+}
+
+export async function listenForDirectoryDrops(
+  handler: (event: DragDropEvent) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => {};
+  }
+  return getCurrentWebview().onDragDropEvent((event) => {
+    handler(event.payload);
+  });
 }

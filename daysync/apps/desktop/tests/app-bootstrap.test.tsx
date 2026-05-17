@@ -59,6 +59,7 @@ vi.mock("../src/api/tauri", () => ({
   chooseDirectory: vi.fn().mockResolvedValue(null),
   chooseFiles: vi.fn().mockResolvedValue([]),
   chooseSubtitleFile: vi.fn().mockResolvedValue(null),
+  listenForDirectoryDrops: vi.fn().mockResolvedValue(() => {}),
 }));
 
 describe("App bootstrap", () => {

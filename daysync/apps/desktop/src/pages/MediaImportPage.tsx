@@ -1,7 +1,8 @@
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import { ApiError, importMedia } from "../api/client";
-import { chooseDirectory } from "../api/tauri";
+import { chooseDirectory, listenForDirectoryDrops } from "../api/tauri";
+import { assignDroppedDirectories } from "../media-import";
 import { useAppState } from "../state/AppState";
 
 export function MediaImportPage() {
@@ -9,7 +10,65 @@ export function MediaImportPage() {
   const [videoDirectory, setVideoDirectory] = useState("");
   const [audioDirectory, setAudioDirectory] = useState("");
   const [busy, setBusy] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const paths = useMemo(() => [videoDirectory, audioDirectory].filter(Boolean), [audioDirectory, videoDirectory]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+
+    void listenForDirectoryDrops((event) => {
+      if (event.type === "enter" || event.type === "over") {
+        setDragActive(true);
+        return;
+      }
+      if (event.type === "leave") {
+        setDragActive(false);
+        return;
+      }
+      if (event.type !== "drop") {
+        return;
+      }
+
+      setDragActive(false);
+      const next = assignDroppedDirectories(videoDirectory, audioDirectory, event.paths);
+      if (next.acceptedCount === 0) {
+        dispatch({
+          type: "SET_NOTICE",
+          payload: {
+            tone: "neutral",
+            message: "拖入的目录未被采用。若两个目录都已填写，请先清空或直接改写输入框。",
+          },
+        });
+        return;
+      }
+
+      setVideoDirectory(next.videoDirectory);
+      setAudioDirectory(next.audioDirectory);
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: next.ignoredCount ? "neutral" : "success",
+          message: next.ignoredCount
+            ? `已接收 ${next.acceptedCount} 个目录，忽略 ${next.ignoredCount} 个多余路径。`
+            : `已接收 ${next.acceptedCount} 个拖入目录，现在可以开始导入。`,
+        },
+      });
+    }).then((dispose) => {
+      if (disposed) {
+        dispose();
+        return;
+      }
+      unlisten = dispose;
+    });
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [audioDirectory, dispatch, videoDirectory]);
 
   async function pickVideoDirectory() {
     const selected = await chooseDirectory();
@@ -70,6 +129,12 @@ export function MediaImportPage() {
           <span>分别选择视频目录与外录音频目录，系统会自动递归导入 `mov / mp4 / wav / m4a`</span>
         </header>
         <form className="form-stack" onSubmit={handleImport}>
+          <div className={`drop-zone${dragActive ? " is-active" : ""}`}>
+            <strong>把视频目录或外录音频目录直接拖进这里也可以导入</strong>
+            <span>
+              拖入 1 个目录时会填到第一个空位；拖入 2 个目录时按“视频目录、外录音频目录”顺序填充。
+            </span>
+          </div>
           <label>
             <span>视频目录</span>
             <div className="inline-field">
@@ -102,7 +167,7 @@ export function MediaImportPage() {
               rows={5}
               value={paths.join("\n")}
               readOnly
-              placeholder={"选择视频目录与外录音频目录后，会显示在这里"}
+              placeholder={"选择或拖入视频目录与外录音频目录后，会显示在这里"}
             />
           </label>
           <div className="button-row">

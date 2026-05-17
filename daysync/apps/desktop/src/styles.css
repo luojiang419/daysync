@@ -437,6 +437,27 @@ textarea {
   color: var(--text-soft);
 }
 
+.drop-zone {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px dashed rgba(36, 70, 94, 0.28);
+  background: rgba(36, 70, 94, 0.05);
+  color: var(--steel);
+  transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+.drop-zone.is-active {
+  border-color: rgba(180, 84, 43, 0.5);
+  background: rgba(180, 84, 43, 0.1);
+  transform: translateY(-1px);
+}
+
+.drop-zone span {
+  color: var(--text-soft);
+}
+
 .cluster-result-card {
   display: grid;
   gap: 16px;
