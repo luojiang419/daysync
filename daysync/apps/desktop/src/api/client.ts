@@ -116,13 +116,22 @@ type ExportJobListResponse = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      ...init,
+    });
+  } catch (error) {
+    throw new ApiError(
+      "API_UNREACHABLE",
+      "未连接到本地 API，请稍后重试；如果是桌面版，请等待本地运行时完成启动。",
+      { cause: error instanceof Error ? error.message : String(error) },
+    );
+  }
 
   const payloadText = await response.text();
   const payload = payloadText ? (JSON.parse(payloadText) as Record<string, unknown>) : {};
@@ -145,6 +154,30 @@ export function getApiBaseUrl(): string {
 
 export async function checkHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/api/health");
+}
+
+export async function waitForApiReady(
+  options: { attempts?: number; delayMs?: number } = {},
+): Promise<HealthResponse> {
+  const attempts = options.attempts ?? 8;
+  const delayMs = options.delayMs ?? 500;
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await checkHealth();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  if (lastError instanceof ApiError) {
+    throw lastError;
+  }
+  throw new ApiError("API_UNREACHABLE", "未连接到本地 API。");
 }
 
 export async function createProject(payload: {

@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from "react";
 
-import { ApiError, createProject, openProject } from "../api/client";
-import { chooseDirectory } from "../api/tauri";
+import { ApiError, checkHealth, createProject, openProject, waitForApiReady } from "../api/client";
+import { chooseDirectory, ensureDevApi } from "../api/tauri";
 import { loadLastProjectRoot, saveLastProjectRoot } from "../project-persistence";
 import { useAppState } from "../state/AppState";
 
@@ -11,10 +11,46 @@ export function ProjectHomePage() {
   const [createForm, setCreateForm] = useState({
     name: "",
     rootPath: rememberedRoot,
-    shootingDate: "",
+    shootingNote: "",
   });
   const [openPath, setOpenPath] = useState(rememberedRoot);
   const [busyAction, setBusyAction] = useState<"create" | "open" | null>(null);
+
+  async function ensureApiConnection(): Promise<boolean> {
+    try {
+      const initialHealth = await checkHealth();
+      dispatch({
+        type: "SET_HEALTH",
+        payload: {
+          state: initialHealth.ffmpeg.ready ? "ready" : "error",
+          message: `API 已连接，本会话登记 ${initialHealth.registered_projects} 个项目，FFmpeg ${initialHealth.ffmpeg.version ?? "unknown"} · ${initialHealth.ffmpeg.source ?? "unknown"}`,
+        },
+      });
+      return true;
+    } catch {
+      try {
+        await ensureDevApi();
+      } catch {
+        // 非 Tauri 环境或本地运行时不可自动拉起时，继续等待。
+      }
+    }
+
+    try {
+      const health = await waitForApiReady({ attempts: 12, delayMs: 500 });
+      dispatch({
+        type: "SET_HEALTH",
+        payload: {
+          state: health.ffmpeg.ready ? "ready" : "error",
+          message: `API 已连接，本会话登记 ${health.registered_projects} 个项目，FFmpeg ${health.ffmpeg.version ?? "unknown"} · ${health.ffmpeg.source ?? "unknown"}`,
+        },
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "未连接到本地 API。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+      return false;
+    }
+  }
 
   async function pickCreateDirectory() {
     const directory = await chooseDirectory();
@@ -35,10 +71,14 @@ export function ProjectHomePage() {
     setBusyAction("create");
     dispatch({ type: "SET_NOTICE", payload: null });
     try {
+      const ready = await ensureApiConnection();
+      if (!ready) {
+        return;
+      }
       const snapshot = await createProject({
         name: createForm.name,
         root_path: createForm.rootPath,
-        shooting_date: createForm.shootingDate || undefined,
+        shooting_date: createForm.shootingNote || undefined,
       });
       saveLastProjectRoot(snapshot.project.root_path);
       dispatch({ type: "HYDRATE_PROJECT", payload: snapshot });
@@ -59,6 +99,10 @@ export function ProjectHomePage() {
     setBusyAction("open");
     dispatch({ type: "SET_NOTICE", payload: null });
     try {
+      const ready = await ensureApiConnection();
+      if (!ready) {
+        return;
+      }
       const snapshot = await openProject(openPath);
       saveLastProjectRoot(snapshot.project.root_path);
       dispatch({ type: "HYDRATE_PROJECT", payload: snapshot });
@@ -137,13 +181,13 @@ export function ProjectHomePage() {
             </div>
           </label>
           <label>
-            <span>拍摄日期</span>
+            <span>辅助备注（可选）</span>
             <input
-              type="date"
-              value={createForm.shootingDate}
+              value={createForm.shootingNote}
               onChange={(event) =>
-                setCreateForm((current) => ({ ...current, shootingDate: event.target.value }))
+                setCreateForm((current) => ({ ...current, shootingNote: event.target.value }))
               }
+              placeholder="例如：2026/05/17 首次整理，或客户给的项目备注"
             />
           </label>
           <button type="submit" className="primary-button" disabled={busyAction === "create"}>
