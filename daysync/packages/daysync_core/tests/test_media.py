@@ -31,8 +31,10 @@ def test_parse_ffprobe_audio_json(sample_root: Path) -> None:
 def test_ffprobe_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     dummy_file = tmp_path / "missing_ffprobe.mov"
     dummy_file.write_text("placeholder", encoding="utf-8")
-    monkeypatch.delenv("DAYSYNC_FFPROBE_BIN", raising=False)
-    monkeypatch.setattr("daysync_core.media.ffprobe.shutil.which", lambda _: None)
+    monkeypatch.setattr(
+        "daysync_core.media.ffprobe.resolve_ffprobe_binary",
+        lambda: (_ for _ in ()).throw(DaySyncError("FFMPEG_NOT_FOUND", "ffprobe executable was not found")),
+    )
     with pytest.raises(DaySyncError) as exc_info:
         probe_media(dummy_file)
     assert exc_info.value.code == "FFMPEG_NOT_FOUND"

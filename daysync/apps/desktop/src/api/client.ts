@@ -23,6 +23,15 @@ export class ApiError extends Error {
 type HealthResponse = {
   status: string;
   registered_projects: number;
+  ffmpeg: {
+    ready: boolean;
+    source: string | null;
+    version: string | null;
+    root_path: string;
+    ffmpeg_path: string | null;
+    ffprobe_path: string | null;
+    error: string | null;
+  };
 };
 
 type ImportMediaResponse = {

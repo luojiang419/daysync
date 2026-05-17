@@ -6,6 +6,15 @@ license: MIT
 
 ## 必须在全程使用中文和我对话
 
+## DaySync 工作流规则
+
+1. 当前项目的 Git 仓库根目录固定为 `DaySync_自动合板软件/` 外层目录，`daysync/`、`doc/` 和 `需求` 都必须进入同一个仓库统一回滚。
+2. 任何正式修改开始前，必须先在仓库根执行 `scripts/backup_before_change.ps1`。
+3. 只有当 `origin/main` 推送成功且时间戳备份 tag 推送成功后，才允许继续修改文件。
+4. 如果工作区存在未提交内容，备份脚本应先自动生成一次 `backup: pre-change snapshot ...` 提交，再推送 `main` 和备份 tag。
+5. 禁止跳过备份步骤，禁止使用 `force push` 覆盖远端备份历史。
+6. FFmpeg / ffprobe 必须优先保证项目内自补齐版本可用，不能把“依赖系统已安装”当成默认前提。
+
 # Karpathy Guidelines
 
 Behavioral guidelines to reduce common LLM coding mistakes, derived from [Andrej Karpathy's observations](https://x.com/karpathy/status/2015883857489522876) on LLM coding pitfalls.

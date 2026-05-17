@@ -28,7 +28,7 @@ daysync/
 - Node.js 24+
 - pnpm 10+
 - Rust 1.95+
-- FFmpeg / ffprobe 可选，未安装时媒体测试使用 mock 数据
+- FFmpeg / ffprobe 会自动下载到项目目录，未预装也可直接运行
 
 ## 常用命令
 
@@ -40,6 +40,7 @@ uv run uvicorn services.api.main:app --reload --host 127.0.0.1 --port 17831
 pnpm --filter desktop dev
 pnpm --filter desktop test
 pnpm --filter desktop tauri dev
+uv run python scripts/ensure_ffmpeg.py
 ```
 
 ## FFmpeg 配置
@@ -49,4 +50,8 @@ pnpm --filter desktop tauri dev
 - `DAYSYNC_FFPROBE_BIN`
 - `DAYSYNC_FFMPEG_BIN`
 
-如果未设置，会回退到系统 `PATH`。
+如果未设置，会按以下顺序补齐：
+
+1. 项目内 `tools/ffmpeg/windows-x64/current/bin/`
+2. 系统 `PATH`
+3. 自动下载 Gyan Windows release essentials ZIP 到项目目录

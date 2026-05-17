@@ -8,6 +8,7 @@ from daysync_core.errors import DaySyncError
 @dataclass
 class AppState:
     project_roots: dict[str, str] = field(default_factory=dict)
+    ffmpeg_status: dict[str, object] | None = None
 
     def register(self, project_id: str, root_path: str) -> None:
         self.project_roots[project_id] = root_path

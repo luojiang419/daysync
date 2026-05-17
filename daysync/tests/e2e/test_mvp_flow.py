@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -21,7 +22,25 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
 
         return parse_ffprobe_payload(media_path, fixtures[media_path.name])
 
+    fake_ffmpeg_status = {
+        "ready": True,
+        "source": "test",
+        "version": "8.1.1",
+        "root_path": str(tmp_path / "ffmpeg"),
+        "ffmpeg_path": str(tmp_path / "ffmpeg" / "ffmpeg.exe"),
+        "ffprobe_path": str(tmp_path / "ffmpeg" / "ffprobe.exe"),
+        "error": None,
+    }
+
     monkeypatch.setattr("daysync_core.media.service.probe_media", fake_probe)
+    monkeypatch.setattr(
+        "services.api.main.ensure_ffmpeg_runtime",
+        lambda: SimpleNamespace(to_dict=lambda: fake_ffmpeg_status),
+    )
+    monkeypatch.setattr(
+        "services.api.routes.media.ensure_ffmpeg_runtime",
+        lambda: SimpleNamespace(to_dict=lambda: fake_ffmpeg_status),
+    )
 
     client = TestClient(app)
     project_root = tmp_path / "project"

@@ -1,22 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 from fractions import Fraction
 from pathlib import Path
 
 from daysync_core.errors import DaySyncError
 from daysync_core.utils import new_uuid
-
-
-def resolve_ffprobe_binary() -> str:
-    if env_binary := os.getenv("DAYSYNC_FFPROBE_BIN"):
-        return env_binary
-    if binary := shutil.which("ffprobe"):
-        return binary
-    raise DaySyncError("FFMPEG_NOT_FOUND", "ffprobe executable was not found")
+from .runtime import resolve_ffprobe_binary
 
 
 def run_ffprobe(path: str | Path) -> dict[str, object]:

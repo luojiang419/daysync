@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from daysync_core.errors import DaySyncError
+from daysync_core.media import ensure_ffmpeg_runtime, ffmpeg_status_from_exception
 
 from .app_state import AppState
 from .routes.export import router as export_router
@@ -14,7 +17,18 @@ from .routes.subtitles import router as subtitles_router
 from .routes.sync import router as sync_router
 from .routes.timeline import router as timeline_router
 
-app = FastAPI(title="DaySync API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if not hasattr(app.state, "runtime"):
+        app.state.runtime = AppState()
+    try:
+        app.state.runtime.ffmpeg_status = ensure_ffmpeg_runtime().to_dict()
+    except Exception as exc:
+        app.state.runtime.ffmpeg_status = ffmpeg_status_from_exception(exc).to_dict()
+    yield
+
+
+app = FastAPI(title="DaySync API", version="0.1.0", lifespan=lifespan)
 app.state.runtime = AppState()
 
 

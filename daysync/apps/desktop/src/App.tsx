@@ -49,11 +49,14 @@ function App() {
           if (cancelled) {
             return;
           }
+          const ffmpegMessage = health.ffmpeg.ready
+            ? `FFmpeg ${health.ffmpeg.version ?? "unknown"} · ${health.ffmpeg.source ?? "unknown"}`
+            : `FFmpeg 未就绪：${health.ffmpeg.error ?? "未知错误"}`;
           dispatch({
             type: "SET_HEALTH",
             payload: {
-              state: "ready",
-              message: `API 已连接，本会话登记 ${health.registered_projects} 个项目`,
+              state: health.ffmpeg.ready ? "ready" : "error",
+              message: `API 已连接，本会话登记 ${health.registered_projects} 个项目，${ffmpegMessage}`,
             },
           });
           return;
