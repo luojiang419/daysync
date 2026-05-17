@@ -143,6 +143,36 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
     assert offset_cluster_response.status_code == 200
     assert offset_cluster_response.json()["cluster_summary"]["candidate_count"] == 1
 
+    cluster_candidate_response = client.post(
+        f"/api/projects/{project_id}/sync/cluster-candidate",
+        json={
+            "pairs": [
+                {
+                    "video_subtitle_id": search_data["video_results"][0]["subtitle_id"],
+                    "audio_subtitle_id": search_data["audio_results"][0]["subtitle_id"],
+                }
+            ],
+            "tolerance_ms": 500,
+            "min_inlier_ratio": 0.6,
+            "min_anchor_count": 3,
+            "context_radius": 1,
+            "note": None,
+        },
+    )
+    assert cluster_candidate_response.status_code == 200
+    candidate_sync_result_id = cluster_candidate_response.json()["sync_result"]["id"]
+
+    review_queue_response = client.get(f"/api/projects/{project_id}/sync/review-queue")
+    assert review_queue_response.status_code == 200
+    assert review_queue_response.json()["items"][0]["id"] == candidate_sync_result_id
+
+    review_response = client.post(
+        f"/api/projects/{project_id}/sync/results/{candidate_sync_result_id}/review",
+        json={"action": "accepted", "new_offset_ms": None, "note": None},
+    )
+    assert review_response.status_code == 200
+    assert review_response.json()["sync_result"]["status"] == "accepted_auto"
+
     sync_response = client.post(
         f"/api/projects/{project_id}/sync/manual-anchor",
         json={
@@ -158,4 +188,4 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
         json={"output_path": str(tmp_path / "exports" / "sync_report.csv")},
     )
     assert export_response.status_code == 200
-    assert export_response.json()["row_count"] == 1
+    assert export_response.json()["row_count"] == 2

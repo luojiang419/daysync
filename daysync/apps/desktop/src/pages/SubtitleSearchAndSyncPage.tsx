@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   analyzeOffsetCluster,
   ApiError,
+  createClusterCandidate,
   createManualSync,
   importSubtitles,
   recommendAutoCandidates,
@@ -37,7 +38,14 @@ export function SubtitleSearchAndSyncPage() {
   const [audioSrtPath, setAudioSrtPath] = useState("");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<
-    "video-import" | "audio-import" | "search" | "align" | "recommend" | "cluster" | null
+    | "video-import"
+    | "audio-import"
+    | "search"
+    | "align"
+    | "recommend"
+    | "cluster"
+    | "queue"
+    | null
   >(null);
   const [recommendation, setRecommendation] = useState<AutoCandidateResponse | null>(null);
   const [recommendingFrom, setRecommendingFrom] = useState<"video_ref" | "external_audio" | null>(
@@ -280,6 +288,37 @@ export function SubtitleSearchAndSyncPage() {
     }
   }
 
+  async function handleSaveClusterCandidate() {
+    if (!state.currentProject || !clusterSamples.length) {
+      return;
+    }
+    setBusy("queue");
+    try {
+      const result = await createClusterCandidate(state.currentProject.id, {
+        pairs: clusterSamples.map((sample) => ({
+          video_subtitle_id: sample.video_subtitle_id,
+          audio_subtitle_id: sample.audio_subtitle_id,
+        })),
+        tolerance_ms: 500,
+        min_inlier_ratio: 0.6,
+        min_anchor_count: 3,
+        context_radius: 1,
+      });
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: "success",
+          message: `候选已保存到复核队列，当前状态 ${result.sync_result.status}，建议 offset ${result.sync_result.offset_ms} ms。`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "保存复核候选失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function handleRemoveClusterSample(videoSubtitleId: string, audioSubtitleId: string) {
     setClusterSamples((current) =>
       current.filter(
@@ -514,6 +553,14 @@ export function SubtitleSearchAndSyncPage() {
               onClick={handleAnalyzeCluster}
             >
               {busy === "cluster" ? "分析中..." : "分析 offset 聚类"}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!clusterSamples.length || busy === "queue"}
+              onClick={handleSaveClusterCandidate}
+            >
+              {busy === "queue" ? "保存中..." : "保存到复核队列"}
             </button>
             <button
               type="button"

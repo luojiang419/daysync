@@ -88,6 +88,53 @@ def list_sync_results(connection: sqlite3.Connection, project_id: str) -> list[d
     return [dict(row) for row in rows]
 
 
+def list_review_queue(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
+    rows = connection.execute(
+        """
+        SELECT sr.id, sr.project_id, sr.video_media_file_id, sr.audio_media_file_id, sr.video_in_ms,
+               sr.video_out_ms, sr.audio_in_ms, sr.audio_out_ms, sr.offset_ms, sr.confidence_score,
+               sr.status, sr.source, sr.video_anchor_subtitle_id, sr.audio_anchor_subtitle_id,
+               sr.confidence_breakdown_json, sr.created_at, sr.updated_at,
+               vm.filename AS video_file, am.filename AS audio_file,
+               vs.raw_text AS video_anchor_text, aus.raw_text AS audio_anchor_text
+        FROM sync_results sr
+        JOIN media_files vm ON vm.id = sr.video_media_file_id
+        JOIN media_files am ON am.id = sr.audio_media_file_id
+        LEFT JOIN subtitles vs ON vs.id = sr.video_anchor_subtitle_id
+        LEFT JOIN subtitles aus ON aus.id = sr.audio_anchor_subtitle_id
+        WHERE sr.project_id = ?
+          AND sr.status IN ('candidate', 'needs_review')
+        ORDER BY sr.created_at DESC
+        """,
+        (project_id,),
+    ).fetchall()
+
+    if not rows:
+        return []
+
+    sync_result_ids = [row["id"] for row in rows]
+    review_events = connection.execute(
+        """
+        SELECT id, sync_result_id, event_type, old_offset_ms, new_offset_ms, note, created_at
+        FROM review_events
+        WHERE sync_result_id IN ({placeholders})
+        ORDER BY created_at DESC
+        """.format(placeholders=",".join("?" for _ in sync_result_ids)),
+        sync_result_ids,
+    ).fetchall()
+    review_events_by_result: dict[str, list[dict[str, object]]] = {}
+    for event in review_events:
+        review_events_by_result.setdefault(event["sync_result_id"], []).append(dict(event))
+
+    queue_items: list[dict[str, object]] = []
+    for row in rows:
+        item = dict(row)
+        item["confidence_breakdown"] = _parse_json(item.pop("confidence_breakdown_json"))
+        item["review_events"] = review_events_by_result.get(item["id"], [])
+        queue_items.append(item)
+    return queue_items
+
+
 def recommend_auto_candidates(
     connection: sqlite3.Connection,
     project_id: str,
@@ -105,6 +152,233 @@ def recommend_auto_candidates(
         **recommendation,
         "limit": limit,
         "candidates": recommendation["candidates"][:limit],
+    }
+
+
+def create_cluster_sync_candidate(
+    connection: sqlite3.Connection,
+    project_id: str,
+    pairs: list[dict[str, str]],
+    tolerance_ms: int = 500,
+    min_inlier_ratio: float = 0.6,
+    min_anchor_count: int = 3,
+    context_radius: int = 1,
+    note: str | None = None,
+) -> dict[str, object]:
+    analysis = analyze_offset_cluster(
+        connection,
+        project_id,
+        pairs,
+        tolerance_ms=tolerance_ms,
+        min_inlier_ratio=min_inlier_ratio,
+        min_anchor_count=min_anchor_count,
+        context_radius=context_radius,
+    )
+    pair_analyses = analysis["pair_analyses"]
+    cluster_summary = analysis["cluster_summary"]
+    if not pair_analyses:
+        raise DaySyncError("ANCHOR_SUBTITLE_INVALID", "No cluster pairs available to create candidate")
+
+    relevant_pairs = [pair for pair in pair_analyses if pair["is_inlier"]]
+    if not relevant_pairs:
+        relevant_pairs = pair_analyses
+
+    video_media_ids = {pair["video_source_media_file_id"] for pair in relevant_pairs}
+    audio_media_ids = {pair["audio_source_media_file_id"] for pair in relevant_pairs}
+    if len(video_media_ids) != 1 or len(audio_media_ids) != 1:
+        raise DaySyncError(
+            "ANCHOR_SUBTITLE_INVALID",
+            "Cluster candidate spans multiple media files and cannot be saved as one sync result",
+        )
+
+    video_media_id = next(iter(video_media_ids))
+    audio_media_id = next(iter(audio_media_ids))
+    representative_pair = min(
+        relevant_pairs,
+        key=lambda pair: (
+            pair["cluster_deviation_ms"],
+            0 if pair["reverse_match_consistent"] else 1,
+            -pair["final_score"],
+        ),
+    )
+    proposed_offset_ms = (
+        cluster_summary["final_offset_ms"]
+        if cluster_summary["final_offset_ms"] is not None
+        else cluster_summary["median_offset_ms"]
+    )
+    video_media = _load_media(connection, video_media_id)
+
+    reverse_match_consistency = (
+        cluster_summary["reverse_consistent_count"] / cluster_summary["candidate_count"]
+        if cluster_summary["candidate_count"]
+        else 0.0
+    )
+    text_similarity = _average_metric(relevant_pairs, "text_similarity")
+    context_similarity = _average_metric(relevant_pairs, "context_similarity")
+    candidate_margin = _average_metric(relevant_pairs, "candidate_margin")
+    offset_cluster_stability = cluster_summary["inlier_ratio"]
+    negative_evidence_count = sum(pair["negative_evidence_count"] for pair in relevant_pairs)
+    final_score = max(
+        0.0,
+        min(
+            1.0,
+            text_similarity * 0.3
+            + context_similarity * 0.2
+            + offset_cluster_stability * 0.2
+            + reverse_match_consistency * 0.2
+            + candidate_margin * 0.1
+            - min(negative_evidence_count, 5) * 0.03,
+        ),
+    )
+    confidence_breakdown = {
+        "text_similarity": round(text_similarity, 4),
+        "context_similarity": round(context_similarity, 4),
+        "offset_cluster_stability": round(offset_cluster_stability, 4),
+        "reverse_match_consistency": round(reverse_match_consistency, 4),
+        "candidate_margin": round(candidate_margin, 4),
+        "negative_evidence_count": negative_evidence_count,
+        "final_score": round(final_score, 4),
+        "cluster_summary": cluster_summary,
+        "pair_analyses": pair_analyses,
+        "note": note,
+    }
+
+    sync_result = {
+        "id": new_uuid(),
+        "project_id": project_id,
+        "session_id": None,
+        "video_media_file_id": video_media_id,
+        "audio_media_file_id": audio_media_id,
+        "video_in_ms": 0,
+        "video_out_ms": video_media["duration_ms"],
+        "audio_in_ms": proposed_offset_ms,
+        "audio_out_ms": proposed_offset_ms + video_media["duration_ms"],
+        "offset_ms": proposed_offset_ms,
+        "drift_ppm": None,
+        "confidence_score": round(final_score, 4),
+        "status": "needs_review",
+        "source": "auto_text",
+        "video_anchor_subtitle_id": representative_pair["video_subtitle_id"],
+        "audio_anchor_subtitle_id": representative_pair["audio_subtitle_id"],
+        "confidence_breakdown_json": json.dumps(confidence_breakdown, ensure_ascii=False),
+        "created_at": utc_now_iso(),
+        "updated_at": utc_now_iso(),
+    }
+    connection.execute(
+        """
+        INSERT INTO sync_results (
+          id, project_id, session_id, video_media_file_id, audio_media_file_id, video_in_ms, video_out_ms,
+          audio_in_ms, audio_out_ms, offset_ms, drift_ppm, confidence_score, status, source,
+          video_anchor_subtitle_id, audio_anchor_subtitle_id, confidence_breakdown_json, created_at, updated_at
+        )
+        VALUES (:id, :project_id, :session_id, :video_media_file_id, :audio_media_file_id, :video_in_ms,
+                :video_out_ms, :audio_in_ms, :audio_out_ms, :offset_ms, :drift_ppm, :confidence_score,
+                :status, :source, :video_anchor_subtitle_id, :audio_anchor_subtitle_id,
+                :confidence_breakdown_json, :created_at, :updated_at)
+        """,
+        sync_result,
+    )
+    connection.commit()
+    return {
+        "sync_result": sync_result,
+        "cluster_summary": cluster_summary,
+    }
+
+
+def review_sync_result(
+    connection: sqlite3.Connection,
+    project_id: str,
+    sync_result_id: str,
+    action: str,
+    new_offset_ms: int | None = None,
+    note: str | None = None,
+) -> dict[str, object]:
+    sync_result = _load_sync_result(connection, project_id, sync_result_id)
+    old_offset_ms = sync_result["offset_ms"]
+    updated_at = utc_now_iso()
+    status = sync_result["status"]
+    offset_ms = old_offset_ms
+    audio_in_ms = sync_result["audio_in_ms"]
+    audio_out_ms = sync_result["audio_out_ms"]
+    review_event_type = action
+
+    if action == "accepted":
+        status = "accepted_auto"
+    elif action == "rejected":
+        status = "rejected"
+    elif action == "adjusted":
+        if new_offset_ms is None:
+            raise DaySyncError("ANCHOR_SUBTITLE_INVALID", "new_offset_ms is required for adjusted review")
+        status = "accepted_manual"
+        offset_ms = new_offset_ms
+        audio_in_ms = new_offset_ms
+        audio_out_ms = new_offset_ms + sync_result["video_out_ms"]
+    elif action == "commented":
+        status = sync_result["status"]
+    else:
+        raise DaySyncError("ANCHOR_SUBTITLE_INVALID", f"Unsupported review action: {action}")
+
+    connection.execute(
+        """
+        UPDATE sync_results
+        SET status = ?, offset_ms = ?, audio_in_ms = ?, audio_out_ms = ?, updated_at = ?
+        WHERE id = ? AND project_id = ?
+        """,
+        (status, offset_ms, audio_in_ms, audio_out_ms, updated_at, sync_result_id, project_id),
+    )
+    review_event = {
+        "id": new_uuid(),
+        "project_id": project_id,
+        "sync_result_id": sync_result_id,
+        "event_type": review_event_type,
+        "old_offset_ms": old_offset_ms,
+        "new_offset_ms": offset_ms if action in {"accepted", "adjusted"} else None,
+        "note": note,
+        "created_at": updated_at,
+    }
+    connection.execute(
+        """
+        INSERT INTO review_events (
+          id, project_id, sync_result_id, event_type, old_offset_ms, new_offset_ms, note, created_at
+        )
+        VALUES (:id, :project_id, :sync_result_id, :event_type, :old_offset_ms, :new_offset_ms, :note, :created_at)
+        """,
+        review_event,
+    )
+    connection.commit()
+
+    updated_result = connection.execute(
+        """
+        SELECT sr.id, sr.project_id, sr.video_media_file_id, sr.audio_media_file_id, sr.video_in_ms,
+               sr.video_out_ms, sr.audio_in_ms, sr.audio_out_ms, sr.offset_ms, sr.confidence_score,
+               sr.status, sr.source, sr.video_anchor_subtitle_id, sr.audio_anchor_subtitle_id,
+               sr.confidence_breakdown_json, sr.created_at, sr.updated_at,
+               vm.filename AS video_file, am.filename AS audio_file,
+               vs.raw_text AS video_anchor_text, aus.raw_text AS audio_anchor_text
+        FROM sync_results sr
+        JOIN media_files vm ON vm.id = sr.video_media_file_id
+        JOIN media_files am ON am.id = sr.audio_media_file_id
+        LEFT JOIN subtitles vs ON vs.id = sr.video_anchor_subtitle_id
+        LEFT JOIN subtitles aus ON aus.id = sr.audio_anchor_subtitle_id
+        WHERE sr.id = ? AND sr.project_id = ?
+        """,
+        (sync_result_id, project_id),
+    ).fetchone()
+    review_events = connection.execute(
+        """
+        SELECT id, sync_result_id, event_type, old_offset_ms, new_offset_ms, note, created_at
+        FROM review_events
+        WHERE sync_result_id = ?
+        ORDER BY created_at DESC
+        """,
+        (sync_result_id,),
+    ).fetchall()
+    result_payload = dict(updated_result)
+    result_payload["confidence_breakdown"] = _parse_json(result_payload.pop("confidence_breakdown_json"))
+    result_payload["review_events"] = [dict(event) for event in review_events]
+    return {
+        "sync_result": result_payload,
+        "review_event": review_event,
     }
 
 
@@ -170,10 +444,12 @@ def analyze_offset_cluster(
             {
                 "video_subtitle_id": video_anchor["subtitle_id"],
                 "video_text": video_anchor["raw_text"],
+                "video_source_media_file_id": video_anchor["source_media_file_id"],
                 "video_source_filename": video_anchor["source_filename"],
                 "video_source_start_ms": video_anchor["source_start_ms"],
                 "audio_subtitle_id": candidate["subtitle_id"],
                 "audio_text": candidate["raw_text"],
+                "audio_source_media_file_id": candidate["source_media_file_id"],
                 "audio_source_filename": candidate["source_filename"],
                 "audio_source_start_ms": candidate["source_start_ms"],
                 "offset_ms": offset_ms,
@@ -526,3 +802,34 @@ def _similarity(left: str | None, right: str | None) -> float:
     if not left_text or not right_text:
         return 0.0
     return SequenceMatcher(None, left_text, right_text).ratio()
+
+
+def _load_sync_result(connection: sqlite3.Connection, project_id: str, sync_result_id: str) -> sqlite3.Row:
+    row = connection.execute(
+        """
+        SELECT id, project_id, video_media_file_id, audio_media_file_id, video_in_ms, video_out_ms,
+               audio_in_ms, audio_out_ms, offset_ms, status, source
+        FROM sync_results
+        WHERE id = ? AND project_id = ?
+        """,
+        (sync_result_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise DaySyncError("SYNC_RESULT_NOT_FOUND", "Sync result not found")
+    return row
+
+
+def _average_metric(items: list[dict[str, object]], key: str) -> float:
+    if not items:
+        return 0.0
+    return sum(float(item[key]) for item in items) / len(items)
+
+
+def _parse_json(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}

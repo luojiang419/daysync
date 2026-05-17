@@ -63,6 +63,16 @@ class OffsetClusterRequest(BaseModel):
     context_radius: int = Field(default=1, ge=0, le=3)
 
 
+class ClusterCandidateRequest(OffsetClusterRequest):
+    note: str | None = None
+
+
+class ReviewSyncResultRequest(BaseModel):
+    action: Literal["accepted", "rejected", "adjusted", "commented"]
+    new_offset_ms: int | None = None
+    note: str | None = None
+
+
 class ExportCsvRequest(BaseModel):
     output_path: str
 

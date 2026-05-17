@@ -172,6 +172,41 @@ export type OffsetClusterAnalysisResponse = {
   };
 };
 
+export type ReviewEvent = {
+  id: string;
+  sync_result_id: string;
+  event_type: "accepted" | "rejected" | "adjusted" | "commented";
+  old_offset_ms?: number | null;
+  new_offset_ms?: number | null;
+  note?: string | null;
+  created_at: string;
+};
+
+export type ReviewQueueItem = {
+  id: string;
+  project_id: string;
+  video_media_file_id: string;
+  audio_media_file_id: string;
+  video_in_ms: number;
+  video_out_ms: number;
+  audio_in_ms: number;
+  audio_out_ms: number;
+  offset_ms: number;
+  confidence_score: number;
+  status: string;
+  source: string;
+  video_anchor_subtitle_id?: string | null;
+  audio_anchor_subtitle_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  video_file?: string;
+  audio_file?: string;
+  video_anchor_text?: string;
+  audio_anchor_text?: string;
+  confidence_breakdown: Record<string, unknown>;
+  review_events: ReviewEvent[];
+};
+
 export type SyncResult = {
   id: string;
   offset_ms: number;

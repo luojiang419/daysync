@@ -4,6 +4,7 @@ import type {
   MediaFile,
   OffsetClusterAnalysisResponse,
   ProjectSnapshot,
+  ReviewQueueItem,
   SearchResults,
   SyncResult,
 } from "./types";
@@ -59,6 +60,29 @@ type SyncResponse = {
 
 type AutoCandidateApiResponse = AutoCandidateResponse;
 type OffsetClusterApiResponse = OffsetClusterAnalysisResponse;
+type ReviewQueueResponse = { items: ReviewQueueItem[] };
+type ClusterCandidateResponse = {
+  sync_result: SyncResult & {
+    project_id: string;
+    confidence_score: number;
+    status: string;
+    source: string;
+  };
+  cluster_summary: OffsetClusterAnalysisResponse["cluster_summary"];
+};
+type ReviewSyncResultResponse = {
+  sync_result: ReviewQueueItem;
+  review_event: {
+    id: string;
+    project_id: string;
+    sync_result_id: string;
+    event_type: string;
+    old_offset_ms?: number | null;
+    new_offset_ms?: number | null;
+    note?: string | null;
+    created_at: string;
+  };
+};
 
 type SyncListResponse = {
   sync_results: SyncResult[];
@@ -209,6 +233,49 @@ export async function analyzeOffsetCluster(
       min_inlier_ratio: payload.min_inlier_ratio ?? 0.6,
       min_anchor_count: payload.min_anchor_count ?? 3,
       context_radius: payload.context_radius ?? 1,
+    }),
+  });
+}
+
+export async function createClusterCandidate(
+  projectId: string,
+  payload: {
+    pairs: Array<{ video_subtitle_id: string; audio_subtitle_id: string }>;
+    tolerance_ms?: number;
+    min_inlier_ratio?: number;
+    min_anchor_count?: number;
+    context_radius?: number;
+    note?: string;
+  },
+): Promise<ClusterCandidateResponse> {
+  return request<ClusterCandidateResponse>(`/api/projects/${projectId}/sync/cluster-candidate`, {
+    method: "POST",
+    body: JSON.stringify({
+      pairs: payload.pairs,
+      tolerance_ms: payload.tolerance_ms ?? 500,
+      min_inlier_ratio: payload.min_inlier_ratio ?? 0.6,
+      min_anchor_count: payload.min_anchor_count ?? 3,
+      context_radius: payload.context_radius ?? 1,
+      note: payload.note ?? null,
+    }),
+  });
+}
+
+export async function listReviewQueue(projectId: string): Promise<ReviewQueueResponse> {
+  return request<ReviewQueueResponse>(`/api/projects/${projectId}/sync/review-queue`);
+}
+
+export async function reviewSyncResult(
+  projectId: string,
+  syncResultId: string,
+  payload: { action: "accepted" | "rejected" | "adjusted" | "commented"; new_offset_ms?: number; note?: string },
+): Promise<ReviewSyncResultResponse> {
+  return request<ReviewSyncResultResponse>(`/api/projects/${projectId}/sync/results/${syncResultId}/review`, {
+    method: "POST",
+    body: JSON.stringify({
+      action: payload.action,
+      new_offset_ms: payload.new_offset_ms ?? null,
+      note: payload.note ?? null,
     }),
   });
 }

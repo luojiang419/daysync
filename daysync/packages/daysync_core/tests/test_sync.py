@@ -10,9 +10,12 @@ from daysync_core.media import import_media, parse_ffprobe_payload
 from daysync_core.subtitles import import_srt
 from daysync_core.sync import (
     analyze_offset_cluster,
+    create_cluster_sync_candidate,
     create_manual_anchor_sync,
     list_sync_results,
+    list_review_queue,
     recommend_auto_candidates,
+    review_sync_result,
 )
 from daysync_core.timeline import generate_flat_timeline
 
@@ -185,6 +188,100 @@ def test_analyze_offset_cluster_fails_when_not_enough_pairs(
 
     assert result["cluster_summary"]["passes"] is False
     assert "not_enough_anchor_pairs" in result["cluster_summary"]["reasons"]
+
+
+def test_create_cluster_sync_candidate_and_list_review_queue(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    pair_ids = _prepare_cluster_fixture(project, connection, tmp_path, sample_root)
+    create_cluster_sync_candidate(
+        connection,
+        project["id"],
+        pairs=[
+            {
+                "video_subtitle_id": pair_ids["video_1"],
+                "audio_subtitle_id": pair_ids["audio_good_1"],
+            },
+            {
+                "video_subtitle_id": pair_ids["video_2"],
+                "audio_subtitle_id": pair_ids["audio_good_2"],
+            },
+            {
+                "video_subtitle_id": pair_ids["video_3"],
+                "audio_subtitle_id": pair_ids["audio_good_3"],
+            },
+        ],
+    )
+
+    queue = list_review_queue(connection, project["id"])
+    assert len(queue) == 1
+    assert queue[0]["status"] == "needs_review"
+    assert queue[0]["confidence_breakdown"]["cluster_summary"]["passes"] is True
+
+
+def test_review_sync_result_accept_adjust_and_reject(
+    project_workspace: tuple[dict[str, object], object], tmp_path: Path, sample_root: Path
+) -> None:
+    project, connection = project_workspace
+    pair_ids = _prepare_cluster_fixture(project, connection, tmp_path, sample_root)
+    created = create_cluster_sync_candidate(
+        connection,
+        project["id"],
+        pairs=[
+            {
+                "video_subtitle_id": pair_ids["video_1"],
+                "audio_subtitle_id": pair_ids["audio_good_1"],
+            },
+            {
+                "video_subtitle_id": pair_ids["video_2"],
+                "audio_subtitle_id": pair_ids["audio_good_2"],
+            },
+            {
+                "video_subtitle_id": pair_ids["video_3"],
+                "audio_subtitle_id": pair_ids["audio_good_3"],
+            },
+        ],
+    )
+    sync_result_id = created["sync_result"]["id"]
+
+    accepted = review_sync_result(connection, project["id"], sync_result_id, "accepted")
+    assert accepted["sync_result"]["status"] == "accepted_auto"
+    assert accepted["review_event"]["event_type"] == "accepted"
+
+    second_created = create_cluster_sync_candidate(
+        connection,
+        project["id"],
+        pairs=[
+            {
+                "video_subtitle_id": pair_ids["video_1"],
+                "audio_subtitle_id": pair_ids["audio_good_1"],
+            }
+        ],
+    )
+    adjusted = review_sync_result(
+        connection,
+        project["id"],
+        second_created["sync_result"]["id"],
+        "adjusted",
+        new_offset_ms=574280,
+    )
+    assert adjusted["sync_result"]["status"] == "accepted_manual"
+    assert adjusted["sync_result"]["offset_ms"] == 574280
+
+    third_created = create_cluster_sync_candidate(
+        connection,
+        project["id"],
+        pairs=[
+            {
+                "video_subtitle_id": pair_ids["video_2"],
+                "audio_subtitle_id": pair_ids["audio_good_2"],
+            }
+        ],
+    )
+    rejected = review_sync_result(connection, project["id"], third_created["sync_result"]["id"], "rejected")
+    assert rejected["sync_result"]["status"] == "rejected"
+    assert rejected["review_event"]["event_type"] == "rejected"
 
 
 def _prepare_context_recommendation_fixture(
