@@ -64,10 +64,11 @@ if (-not [string]::IsNullOrWhiteSpace(($statusOutput -join ""))) {
 Invoke-Git -Arguments @("push", "origin", "main")
 
 $tagName = "backup/$tagStamp"
-$existingTag = (& git -C $resolvedRoot tag --list $tagName).Trim()
+$existingTagOutput = & git -C $resolvedRoot tag --list $tagName
 if ($LASTEXITCODE -ne 0) {
     throw "Unable to inspect local tag state."
 }
+$existingTag = if ($null -eq $existingTagOutput) { "" } else { ($existingTagOutput | Out-String).Trim() }
 if (-not [string]::IsNullOrWhiteSpace($existingTag)) {
     throw "Backup tag already exists: $tagName"
 }
