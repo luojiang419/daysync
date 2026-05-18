@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  applyAutoConform,
   ApiError,
   createManualSync,
   getStudioTimeline,
   importSubtitles,
   listSyncResults,
+  previewAutoConform,
   searchSubtitles,
 } from "../api/client";
 import type {
+  AutoConformPreview,
   SearchResult,
   StudioMediaClip,
+  StudioSourceSubtitleGroup,
   StudioSubtitleCue,
   StudioSyncSegment,
   StudioTimelineSnapshot,
@@ -20,7 +24,15 @@ import { StudioTimelineCanvas } from "../components/studio/StudioTimelineCanvas"
 import { chooseSubtitleFile, isTauriRuntime, toMediaAssetUrl } from "../api/tauri";
 import { useAppState } from "../state/AppState";
 
-type BusyState = "loading" | "video-import" | "audio-import" | "search" | "align" | null;
+type BusyState =
+  | "loading"
+  | "video-import"
+  | "audio-import"
+  | "search"
+  | "align"
+  | "auto-preview"
+  | "auto-apply"
+  | null;
 type SelectedAnchor = {
   subtitleId: string;
   rawText: string;
@@ -39,6 +51,7 @@ export function FlatTimelinePage() {
   const [videoSrtPath, setVideoSrtPath] = useState("");
   const [audioSrtPath, setAudioSrtPath] = useState("");
   const [query, setQuery] = useState("");
+  const [autoPreview, setAutoPreview] = useState<AutoConformPreview | null>(null);
   const [searchResults, setSearchResults] = useState<{
     video_results: SearchResult[];
     audio_results: SearchResult[];
@@ -66,6 +79,7 @@ export function FlatTimelinePage() {
       setStudio(null);
       setBusy(null);
       setCurrentFlatTime(0);
+      setAutoPreview(null);
       return;
     }
     void refreshStudioSnapshot();
@@ -237,6 +251,7 @@ export function FlatTimelinePage() {
         path,
         language: "zh-CN",
       });
+      setAutoPreview(null);
       await refreshStudioSnapshot();
       dispatch({
         type: "SET_NOTICE",
@@ -260,6 +275,7 @@ export function FlatTimelinePage() {
     setBusy("search");
     try {
       const results = await searchSubtitles(currentProject.id, query.trim(), 12);
+      setAutoPreview(null);
       setSearchResults(results);
       dispatch({
         type: "SET_NOTICE",
@@ -325,6 +341,7 @@ export function FlatTimelinePage() {
         video_subtitle_id: selectedVideoAnchor.subtitleId,
         audio_subtitle_id: selectedAudioAnchor.subtitleId,
       });
+      setAutoPreview(null);
       const syncResults = await listSyncResults(currentProject.id);
       dispatch({ type: "SET_SYNC_RESULTS", payload: syncResults.sync_results });
       await refreshStudioSnapshot();
@@ -337,6 +354,82 @@ export function FlatTimelinePage() {
       });
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "整轨对齐失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleAutoPreview() {
+    if (!currentProject) {
+      return;
+    }
+    setBusy("auto-preview");
+    try {
+      const result = await previewAutoConform(currentProject.id, {
+        context_radius: 2,
+        min_anchor_count: 3,
+        tolerance_ms: 500,
+        min_inlier_ratio: 0.6,
+      });
+      setAutoPreview(result);
+      if (result.representative_pair) {
+        setCurrentFlatTime(result.representative_pair.video_flat_start_ms);
+      }
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: result.auto_accept_decision.eligible ? "success" : "neutral",
+          message: result.representative_pair
+            ? result.auto_accept_decision.eligible
+              ? `自动整日合板提案已生成，推荐 offset ${result.cluster_summary.final_offset_ms ?? result.cluster_summary.median_offset_ms} ms。`
+              : `自动整日合板提案已生成，但仍需人工确认：${result.cluster_summary.reasons.join(", ") || "未满足自动通过条件"}` 
+            : "当前还没有足够稳定的自动整日合板提案。",
+        },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "自动整日合板预览失败。";
+      dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleApplyAutoPreview() {
+    if (!currentProject || !autoPreview?.representative_pair) {
+      return;
+    }
+    const offsetMs =
+      autoPreview.cluster_summary.final_offset_ms ?? autoPreview.cluster_summary.median_offset_ms;
+    if (offsetMs === null || offsetMs === undefined) {
+      dispatch({
+        type: "SET_NOTICE",
+        payload: { tone: "error", message: "当前提案还没有可应用的整轨 offset。" },
+      });
+      return;
+    }
+    setBusy("auto-apply");
+    try {
+      const result = await applyAutoConform(currentProject.id, {
+        offset_ms: offsetMs,
+        representative_video_subtitle_id: autoPreview.representative_pair.video_subtitle_id,
+        representative_audio_subtitle_id: autoPreview.representative_pair.audio_subtitle_id,
+      });
+      const syncResults = await listSyncResults(currentProject.id);
+      dispatch({ type: "SET_SYNC_RESULTS", payload: syncResults.sync_results });
+      setAutoPreview(null);
+      await refreshStudioSnapshot();
+      dispatch({
+        type: "SET_NOTICE",
+        payload: {
+          tone: "success",
+          message: autoPreview.auto_accept_decision.eligible
+            ? `自动整日合板已应用，生成 ${result.generated_count} 条 accepted 结果。`
+            : `已按确认的 offset 应用整日时间线，生成 ${result.generated_count} 条结果。`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "应用自动整日合板失败。";
       dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
     } finally {
       setBusy(null);
@@ -382,7 +475,7 @@ export function FlatTimelinePage() {
           <header className="studio-section-header">
             <div>
               <h3>整轨摘要</h3>
-              <span>{busy === "loading" ? "刷新中..." : "最新自动整轨"}</span>
+              <span>{busy === "loading" ? "刷新中..." : "最新整日合板工作台"}</span>
             </div>
           </header>
           <div className="studio-kv-list">
@@ -400,6 +493,14 @@ export function FlatTimelinePage() {
                 {studio?.accepted_sync_summary.status === "ready"
                   ? `已建立 ${studio.accepted_sync_summary.accepted_count} 段`
                   : "尚未建立"}
+              </strong>
+            </div>
+            <div>
+              <span>自动合板条件</span>
+              <strong>
+                {studio?.auto_conform_readiness.status === "ready"
+                  ? `已就绪，视频可用种子 ${studio.auto_conform_readiness.video_eligible_seed_count} 条`
+                  : `未就绪：${formatAutoConformReadiness(studio?.auto_conform_readiness)}`}
               </strong>
             </div>
           </div>
@@ -453,8 +554,120 @@ export function FlatTimelinePage() {
         <section className="studio-side-card">
           <header className="studio-section-header">
             <div>
-              <h3>快速搜索</h3>
-              <span>选择一组字幕锚点后直接整轨对齐</span>
+              <h3>字幕反解概览</h3>
+              <span>按原始素材查看整日字幕回写情况</span>
+            </div>
+          </header>
+          <SourceSubtitleGroupColumn title="视频素材字幕" groups={studio?.video_source_subtitle_groups ?? []} />
+          <SourceSubtitleGroupColumn title="音频素材字幕" groups={studio?.audio_source_subtitle_groups ?? []} />
+        </section>
+
+        <section className="studio-side-card">
+          <header className="studio-section-header">
+            <div>
+              <h3>自动整日合板</h3>
+              <span>多句上下文匹配音频锚点，预览后再生成整日时间线</span>
+            </div>
+          </header>
+          <div className="studio-kv-list">
+            <div>
+              <span>视频素材分组</span>
+              <strong>{studio?.auto_conform_readiness.video_group_count ?? 0}</strong>
+            </div>
+            <div>
+              <span>音频素材分组</span>
+              <strong>{studio?.auto_conform_readiness.audio_group_count ?? 0}</strong>
+            </div>
+            <div>
+              <span>warning / failed</span>
+              <strong>
+                {studio
+                  ? `${studio.auto_conform_readiness.video_warning_count + studio.auto_conform_readiness.audio_warning_count} / ${studio.auto_conform_readiness.video_failed_count + studio.auto_conform_readiness.audio_failed_count}`
+                  : "0 / 0"}
+              </strong>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={studio?.auto_conform_readiness.status !== "ready" || busy === "auto-preview"}
+            onClick={handleAutoPreview}
+          >
+            {busy === "auto-preview" ? "分析中..." : "自动分析整日锚点"}
+          </button>
+
+          {autoPreview ? (
+            <div className="studio-search-list">
+              <div className="studio-anchor-card">
+                <span>代表锚点</span>
+                <strong>{autoPreview.representative_pair?.video_text ?? "未产出代表锚点"}</strong>
+                <small>
+                  {autoPreview.representative_pair
+                    ? `${autoPreview.representative_pair.video_source_filename ?? "-"} ↔ ${autoPreview.representative_pair.audio_source_filename ?? "-"}`
+                    : "请先检查字幕覆盖和整轨内容"}
+                </small>
+              </div>
+              <div className="studio-kv-list">
+                <div>
+                  <span>候选锚点组</span>
+                  <strong>{autoPreview.anchor_pairs.length}</strong>
+                </div>
+                <div>
+                  <span>预览片段数</span>
+                  <strong>{autoPreview.preview_segments.length}</strong>
+                </div>
+                <div>
+                  <span>推荐 offset</span>
+                  <strong>{autoPreview.cluster_summary.final_offset_ms ?? autoPreview.cluster_summary.median_offset_ms ?? "-"}</strong>
+                </div>
+                <div>
+                  <span>自动通过</span>
+                  <strong>{autoPreview.auto_accept_decision.eligible ? "是" : "否"}</strong>
+                </div>
+              </div>
+              {autoPreview.anchor_pairs.length ? (
+                <div className="studio-search-list">
+                  {autoPreview.anchor_pairs.map((pair) => (
+                    <div key={`${pair.video_subtitle_id}-${pair.audio_subtitle_id}`} className="studio-search-result">
+                      <strong>{pair.video_text}</strong>
+                      <small>
+                        {pair.audio_text} · offset {pair.offset_ms} ms · {pair.is_inlier ? "inlier" : "outlier"}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {autoPreview.excluded_seeds.length ? (
+                <div className="studio-search-list">
+                  {autoPreview.excluded_seeds.slice(0, 6).map((item) => (
+                    <div key={`${item.subtitle_id}-${item.reason}`} className="studio-search-result">
+                      <strong>{item.raw_text}</strong>
+                      <small>{`${item.source_filename ?? "未映射素材"} · ${formatAutoConformReason(item.reason)}`}</small>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!autoPreview.ready_to_apply || busy === "auto-apply"}
+                onClick={handleApplyAutoPreview}
+              >
+                {busy === "auto-apply"
+                  ? "生成中..."
+                  : autoPreview.auto_accept_decision.eligible
+                    ? "应用自动整日合板"
+                    : "确认此 offset 并生成时间线"}
+              </button>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="studio-side-card">
+          <header className="studio-section-header">
+            <div>
+              <h3>手动兜底</h3>
+              <span>自动提案不稳时，仍可手动搜索字幕锚点整轨对齐</span>
             </div>
           </header>
           <div className="studio-search-box">
@@ -633,6 +846,106 @@ function SearchResultColumn({
       </div>
     </section>
   );
+}
+
+function SourceSubtitleGroupColumn({
+  title,
+  groups,
+}: {
+  title: string;
+  groups: StudioSourceSubtitleGroup[];
+}) {
+  return (
+    <div className="studio-search-list">
+      <strong>{title}</strong>
+      {groups.length ? (
+        groups.map((group) => (
+          <div
+            key={`${group.media_file_id ?? "unmapped"}-${group.source_filename ?? "unknown"}`}
+            className="studio-search-result"
+          >
+            <strong>{group.source_filename ?? "未映射素材字幕"}</strong>
+            <small>
+              {`cue ${group.cue_count} · warning ${group.warning_count} · failed ${group.failed_count} · 可用种子 ${group.eligible_seed_count}`}
+            </small>
+          </div>
+        ))
+      ) : (
+        <span className="status-meta">当前还没有字幕反解结果</span>
+      )}
+    </div>
+  );
+}
+
+function formatAutoConformReadiness(
+  readiness: StudioTimelineSnapshot["auto_conform_readiness"] | undefined,
+): string {
+  if (!readiness) {
+    return "等待整轨数据";
+  }
+  if (!readiness.reasons.length) {
+    return "已就绪";
+  }
+  return readiness.reasons.map(formatAutoConformReason).join(" / ");
+}
+
+function formatAutoConformReason(reason: string): string {
+  switch (reason) {
+    case "missing_video_timeline":
+      return "缺少视频整轨";
+    case "missing_audio_timeline":
+      return "缺少音频整轨";
+    case "missing_video_subtitles":
+      return "缺少视频字幕";
+    case "missing_audio_subtitles":
+      return "缺少音频字幕";
+    case "no_eligible_video_seeds":
+      return "没有可用视频种子";
+    case "mapping_not_ok":
+      return "字幕映射状态异常";
+    case "subtitle_not_mapped_to_source":
+      return "字幕未回写到原始素材";
+    case "normalized_text_empty":
+      return "规范化文本为空";
+    case "text_too_short":
+      return "文本过短";
+    case "duplicate_normalized_text":
+      return "文本重复过高";
+    case "candidate_mapping_not_ok":
+      return "音频候选映射异常";
+    case "candidate_not_mapped_to_source":
+      return "音频候选未映射到原始素材";
+    case "candidate_normalized_text_empty":
+      return "音频候选文本为空";
+    case "candidate_text_too_short":
+      return "音频候选文本过短";
+    case "candidate_duplicate_normalized_text":
+      return "音频候选文本重复过高";
+    case "duplicate_audio_anchor":
+      return "命中重复音频锚点";
+    case "exceeds_per_media_seed_limit":
+      return "超出单素材种子上限";
+    case "no_viable_audio_candidate":
+      return "未找到可用音频候选";
+    case "cluster_not_stable_enough":
+      return "offset 聚类不够稳定";
+    case "not_enough_inlier_anchors":
+      return "有效锚点数量不足";
+    case "not_enough_anchor_pairs":
+      return "锚点对数量不足";
+    case "inlier_ratio_below_threshold":
+      return "inlier 比例不足";
+    case "reverse_match_inconsistency_present":
+      return "存在反向匹配不一致";
+    case "negative_evidence_present":
+      return "存在负证据";
+    case "missing_subtitle_tracks":
+      return "缺少整日字幕轨";
+    case "no_anchor_pairs":
+      return "未产出可用锚点对";
+    default:
+      return reason;
+  }
 }
 
 function findClipAtFlatTime(

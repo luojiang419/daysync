@@ -26,10 +26,12 @@ from daysync_core.studio import get_studio_timeline_snapshot
 from daysync_core.subtitles import import_srt
 from daysync_core.sync import (
     analyze_offset_cluster,
+    apply_auto_conform,
     create_cluster_sync_candidate,
     create_manual_anchor_sync,
     list_review_queue,
     list_sync_results,
+    preview_auto_conform,
     recommend_auto_candidates,
     review_sync_result,
 )
@@ -68,6 +70,8 @@ class RuntimeDispatcher:
             "subtitle.import": self.subtitle_import,
             "subtitle.search": self.subtitle_search,
             "sync.manual_anchor": self.sync_manual_anchor,
+            "sync.auto_conform_preview": self.sync_auto_conform_preview,
+            "sync.apply_auto_conform": self.sync_apply_auto_conform,
             "sync.auto_candidates": self.sync_auto_candidates,
             "sync.offset_cluster": self.sync_offset_cluster,
             "sync.cluster_candidate": self.sync_cluster_candidate,
@@ -216,6 +220,31 @@ class RuntimeDispatcher:
                 self._require_str(payload, "anchor_subtitle_id"),
                 self._require_int(payload, "limit", default=5),
                 self._require_int(payload, "context_radius", default=1),
+            )
+
+    def sync_auto_conform_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
+        project_id = self._require_str(payload, "project_id")
+        root_path = self.state.resolve(project_id)
+        with connect_database(database_path_for_project(root_path)) as connection:
+            return preview_auto_conform(
+                connection,
+                project_id,
+                context_radius=self._require_int(payload, "context_radius", default=2),
+                min_anchor_count=self._require_int(payload, "min_anchor_count", default=3),
+                tolerance_ms=self._require_int(payload, "tolerance_ms", default=500),
+                min_inlier_ratio=self._require_float(payload, "min_inlier_ratio", default=0.6),
+            )
+
+    def sync_apply_auto_conform(self, payload: dict[str, Any]) -> dict[str, Any]:
+        project_id = self._require_str(payload, "project_id")
+        root_path = self.state.resolve(project_id)
+        with connect_database(database_path_for_project(root_path)) as connection:
+            return apply_auto_conform(
+                connection,
+                project_id,
+                offset_ms=self._require_int(payload, "offset_ms"),
+                representative_video_subtitle_id=self._require_str(payload, "representative_video_subtitle_id"),
+                representative_audio_subtitle_id=self._require_str(payload, "representative_audio_subtitle_id"),
             )
 
     def sync_offset_cluster(self, payload: dict[str, Any]) -> dict[str, Any]:

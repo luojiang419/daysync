@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from statistics import median
 
+AUTO_CONFORM_MIN_TEXT_LENGTH = 4
+
 
 def get_studio_timeline_snapshot(
     connection: sqlite3.Connection,
@@ -36,6 +38,8 @@ def get_studio_timeline_snapshot(
 
     accepted_rows = _load_latest_accepted_sync_rows(connection, project_id)
     sync_segments = _build_sync_segments(accepted_rows, video_clips, audio_clips)
+    video_source_subtitle_groups = _group_source_subtitles(video_subtitles)
+    audio_source_subtitle_groups = _group_source_subtitles(audio_subtitles)
 
     return {
         "project_id": project_id,
@@ -53,6 +57,16 @@ def get_studio_timeline_snapshot(
         "audio_clips": audio_clips,
         "video_subtitles": video_subtitles,
         "audio_subtitles": audio_subtitles,
+        "video_source_subtitle_groups": video_source_subtitle_groups,
+        "audio_source_subtitle_groups": audio_source_subtitle_groups,
+        "auto_conform_readiness": _build_auto_conform_readiness(
+            video_timeline=video_timeline,
+            audio_timeline=audio_timeline,
+            video_subtitle_track=video_subtitle_track,
+            audio_subtitle_track=audio_subtitle_track,
+            video_groups=video_source_subtitle_groups,
+            audio_groups=audio_source_subtitle_groups,
+        ),
         "sync_segments": sync_segments,
         "accepted_sync_summary": _build_accepted_sync_summary(sync_segments),
     }
@@ -146,8 +160,8 @@ def _load_subtitle_cues(
     rows = connection.execute(
         """
         SELECT s.id, s.track_id, s.subtitle_index, s.flat_start_ms, s.flat_end_ms,
-               s.source_start_ms, s.source_end_ms, s.raw_text, s.mapping_status, s.mapping_warning,
-               mf.filename AS source_filename
+               s.source_media_file_id, s.source_start_ms, s.source_end_ms, s.raw_text, s.normalized_text,
+               s.mapping_status, s.mapping_warning, mf.filename AS source_filename
         FROM subtitles s
         LEFT JOIN media_files mf ON mf.id = s.source_media_file_id
         WHERE s.track_id = ?
@@ -163,15 +177,82 @@ def _load_subtitle_cues(
             "subtitle_index": row["subtitle_index"],
             "flat_start_ms": row["flat_start_ms"],
             "flat_end_ms": row["flat_end_ms"],
+            "source_media_file_id": row["source_media_file_id"],
             "source_start_ms": row["source_start_ms"],
             "source_end_ms": row["source_end_ms"],
             "raw_text": row["raw_text"],
+            "normalized_text": row["normalized_text"],
             "mapping_status": row["mapping_status"],
             "mapping_warning": row["mapping_warning"],
             "source_filename": row["source_filename"],
         }
         for row in rows
     ]
+
+
+def _group_source_subtitles(cues: list[dict[str, object]]) -> list[dict[str, object]]:
+    grouped: dict[str, dict[str, object]] = {}
+    for cue in cues:
+        media_file_id = str(cue.get("source_media_file_id") or "__unmapped__")
+        group = grouped.setdefault(
+            media_file_id,
+            {
+                "media_file_id": None if media_file_id == "__unmapped__" else media_file_id,
+                "source_filename": cue.get("source_filename"),
+                "cue_count": 0,
+                "warning_count": 0,
+                "failed_count": 0,
+                "eligible_seed_count": 0,
+                "cues": [],
+            },
+        )
+        group["cue_count"] += 1
+        if cue["mapping_status"] == "warning":
+            group["warning_count"] += 1
+        if cue["mapping_status"] == "failed":
+            group["failed_count"] += 1
+        normalized_text = str(cue.get("normalized_text") or "").strip()
+        if cue["mapping_status"] == "ok" and len(normalized_text) >= AUTO_CONFORM_MIN_TEXT_LENGTH:
+            group["eligible_seed_count"] += 1
+        group["cues"].append(cue)
+
+    return list(grouped.values())
+
+
+def _build_auto_conform_readiness(
+    *,
+    video_timeline: sqlite3.Row | None,
+    audio_timeline: sqlite3.Row | None,
+    video_subtitle_track: sqlite3.Row | None,
+    audio_subtitle_track: sqlite3.Row | None,
+    video_groups: list[dict[str, object]],
+    audio_groups: list[dict[str, object]],
+) -> dict[str, object]:
+    reasons: list[str] = []
+    if video_timeline is None:
+        reasons.append("missing_video_timeline")
+    if audio_timeline is None:
+        reasons.append("missing_audio_timeline")
+    if video_subtitle_track is None:
+        reasons.append("missing_video_subtitles")
+    if audio_subtitle_track is None:
+        reasons.append("missing_audio_subtitles")
+
+    video_eligible_seed_count = sum(int(group["eligible_seed_count"]) for group in video_groups)
+    if not reasons and video_eligible_seed_count == 0:
+        reasons.append("no_eligible_video_seeds")
+
+    return {
+        "status": "ready" if not reasons else "missing",
+        "reasons": reasons,
+        "video_group_count": len(video_groups),
+        "audio_group_count": len(audio_groups),
+        "video_warning_count": sum(int(group["warning_count"]) for group in video_groups),
+        "audio_warning_count": sum(int(group["warning_count"]) for group in audio_groups),
+        "video_failed_count": sum(int(group["failed_count"]) for group in video_groups),
+        "audio_failed_count": sum(int(group["failed_count"]) for group in audio_groups),
+        "video_eligible_seed_count": video_eligible_seed_count,
+    }
 
 
 def _load_latest_accepted_sync_rows(

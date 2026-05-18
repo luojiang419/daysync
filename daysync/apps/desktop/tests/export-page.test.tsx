@@ -88,7 +88,7 @@ describe("ExportPage", () => {
 
     render(<ExportPage />);
 
-    expect(screen.getByText(/CSV \/ FCP 7 XML \/ JSON \/ OTIO \/ FCPXML/)).toBeInTheDocument();
+    expect(screen.getByText(/CSV \/ Premiere XML \/ JSON \/ OTIO \/ DaVinci XML/)).toBeInTheDocument();
     expect(screen.getByText("最近导出记录")).toBeInTheDocument();
     expect(await screen.findByText("D:\\exports\\sync_report.json")).toBeInTheDocument();
     expect(screen.getByText(/创建 2026-05-17T13:45:04Z/)).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe("ExportPage", () => {
     });
   });
 
-  it("点击导出 FCPXML 时写入默认 fcpxml 路径", async () => {
+  it("点击导出 DaVinci XML 时写入默认 fcpxml 路径", async () => {
     const user = userEvent.setup();
     vi.mocked(apiClient.listReviewQueue).mockResolvedValue({ items: [] });
     vi.mocked(apiClient.listSyncResults).mockResolvedValue({ sync_results: [] });
@@ -158,8 +158,8 @@ describe("ExportPage", () => {
 
     render(<ExportPage />);
 
-    await screen.findByText("导出 FCPXML");
-    await user.click(screen.getByRole("button", { name: "导出 FCPXML" }));
+    await screen.findByText("导出 DaVinci XML");
+    await user.click(screen.getByRole("button", { name: "导出 DaVinci XML" }));
 
     await waitFor(() => {
       expect(apiClient.exportFcpxml).toHaveBeenCalledWith(

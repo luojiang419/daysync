@@ -1,4 +1,12 @@
-import { ApiError, checkHealth, createProject, ensureLocalApiReady, waitForApiReady } from "../src/api/client";
+import {
+  ApiError,
+  applyAutoConform,
+  checkHealth,
+  createProject,
+  ensureLocalApiReady,
+  previewAutoConform,
+  waitForApiReady,
+} from "../src/api/client";
 
 vi.mock("../src/api/tauri", () => ({
   RuntimeInvocationError: class RuntimeInvocationError extends Error {
@@ -149,6 +157,84 @@ describe("api client", () => {
       name: "测试项目",
       root_path: "D:\\projects\\demo",
       shooting_date: "2026-05-17",
+    });
+  });
+
+  it("自动整日合板预览会调用新的 runtime 方法", async () => {
+    const tauriApi = await import("../src/api/tauri");
+    vi.mocked(tauriApi.invokeRuntime).mockResolvedValueOnce({
+      representative_pair: null,
+      anchor_pairs: [],
+      excluded_seeds: [],
+      cluster_summary: {
+        candidate_count: 0,
+        median_offset_ms: null,
+        final_offset_ms: null,
+        inlier_count: 0,
+        inlier_ratio: 0,
+        passes: false,
+        tolerance_ms: 500,
+        min_inlier_ratio: 0.6,
+        min_anchor_count: 3,
+        reverse_consistent_count: 0,
+        negative_evidence_pair_count: 0,
+        reasons: ["no_anchor_pairs"],
+      },
+      auto_accept_decision: {
+        eligible: false,
+        reasons: ["no_anchor_pairs"],
+        average_candidate_margin: 0,
+        min_candidate_margin: 0.1,
+      },
+      preview_segments: [],
+      ready_to_apply: false,
+      selected_seed_count: 0,
+      eligible_seed_count: 0,
+    });
+
+    await previewAutoConform("project-1");
+
+    expect(tauriApi.invokeRuntime).toHaveBeenCalledWith("sync.auto_conform_preview", {
+      project_id: "project-1",
+      context_radius: 2,
+      min_anchor_count: 3,
+      tolerance_ms: 500,
+      min_inlier_ratio: 0.6,
+    });
+  });
+
+  it("自动整日合板应用会调用新的 runtime 方法", async () => {
+    const tauriApi = await import("../src/api/tauri");
+    vi.mocked(tauriApi.invokeRuntime).mockResolvedValueOnce({
+      sync_result: {
+        id: "sync-1",
+        offset_ms: 574180,
+        status: "accepted_auto",
+        source: "auto_text",
+        confidence_score: 1,
+      },
+      generated_count: 2,
+      track_offset_ms: 574180,
+      sync_result_summary: {
+        status: "accepted_auto",
+        source: "auto_text",
+        accepted_count: 2,
+        representative_video_file: "A001_C001.mov",
+        representative_audio_file: "ZOOM0001.wav",
+      },
+    });
+
+    await applyAutoConform("project-1", {
+      offset_ms: 574180,
+      representative_video_subtitle_id: "video-sub-1",
+      representative_audio_subtitle_id: "audio-sub-1",
+    });
+
+    expect(tauriApi.invokeRuntime).toHaveBeenCalledWith("sync.apply_auto_conform", {
+      project_id: "project-1",
+      offset_ms: 574180,
+      representative_video_subtitle_id: "video-sub-1",
+      representative_audio_subtitle_id: "audio-sub-1",
     });
   });
 });

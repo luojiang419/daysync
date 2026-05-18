@@ -24,9 +24,9 @@ function formatExportType(exportType: ExportJob["export_type"]): string {
     case "csv":
       return "CSV";
     case "fcp7_xml":
-      return "FCP 7 XML";
+      return "Premiere XML";
     case "fcpxml":
-      return "FCPXML";
+      return "DaVinci XML";
     case "otio":
       return "OTIO";
     case "json":
@@ -285,11 +285,11 @@ export function ExportPage() {
         type: "SET_NOTICE",
         payload: {
           tone: "success",
-          message: `FCP 7 XML 已导出到 ${result.output_path}，共 ${result.sequence_count} 条 sequence。`,
+          message: `Premiere XML 已导出到 ${result.output_path}，共 ${result.sequence_count} 条 sequence。`,
         },
       });
     } catch (error) {
-      const message = error instanceof ApiError ? error.message : "导出 FCP 7 XML 失败。";
+      const message = error instanceof ApiError ? error.message : "导出 Premiere XML 失败。";
       dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
     } finally {
       setBusy(false);
@@ -366,11 +366,11 @@ export function ExportPage() {
         type: "SET_NOTICE",
         payload: {
           tone: "success",
-          message: `FCPXML 已导出到 ${result.output_path}，共 ${result.project_count} 个 project。`,
+          message: `DaVinci XML 已导出到 ${result.output_path}，共 ${result.project_count} 个 project。`,
         },
       });
     } catch (error) {
-      const message = error instanceof ApiError ? error.message : "导出 FCPXML 失败。";
+      const message = error instanceof ApiError ? error.message : "导出 DaVinci XML 失败。";
       dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
     } finally {
       setBusy(false);
@@ -415,7 +415,7 @@ export function ExportPage() {
       <article className="panel-card span-two">
         <header className="card-header">
           <h2>同步结果与多格式导出</h2>
-          <span>支持 `CSV / FCP 7 XML / JSON / OTIO / FCPXML`，只导出 `accepted_manual / accepted_auto` 结果</span>
+          <span>支持 `CSV / Premiere XML / JSON / OTIO / DaVinci XML`，只导出 `accepted_manual / accepted_auto` 结果</span>
         </header>
 
         <div className="metrics-grid">
@@ -452,7 +452,7 @@ export function ExportPage() {
             disabled={!outputPath || busy}
             onClick={handleExportFcp7Xml}
           >
-            {busy ? "导出中..." : "导出 FCP 7 XML"}
+            {busy ? "导出中..." : "导出 Premiere XML"}
           </button>
           <button
             type="button"
@@ -476,7 +476,7 @@ export function ExportPage() {
             disabled={!outputPath || busy}
             onClick={handleExportFcpxml}
           >
-            {busy ? "导出中..." : "导出 FCPXML"}
+            {busy ? "导出中..." : "导出 DaVinci XML"}
           </button>
         </form>
 

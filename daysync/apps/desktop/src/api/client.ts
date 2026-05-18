@@ -1,6 +1,8 @@
 import type {
   AutoAcceptDecision,
   AutoCandidateResponse,
+  AutoConformApplyResponse,
+  AutoConformPreview,
   ExportJob,
   FlatTimeline,
   MediaFile,
@@ -67,6 +69,8 @@ type SyncResponse = {
 };
 
 type AutoCandidateApiResponse = AutoCandidateResponse;
+type AutoConformPreviewResponse = AutoConformPreview;
+type AutoConformApplyApiResponse = AutoConformApplyResponse;
 type OffsetClusterApiResponse = OffsetClusterAnalysisResponse;
 type ReviewQueueResponse = { items: ReviewQueueItem[] };
 type ClusterCandidateResponse = {
@@ -242,6 +246,40 @@ export async function recommendAutoCandidates(
     anchor_subtitle_id: payload.anchor_subtitle_id,
     limit: payload.limit ?? 5,
     context_radius: payload.context_radius ?? 1,
+  });
+}
+
+export async function previewAutoConform(
+  projectId: string,
+  payload: {
+    context_radius?: number;
+    min_anchor_count?: number;
+    tolerance_ms?: number;
+    min_inlier_ratio?: number;
+  } = {},
+): Promise<AutoConformPreviewResponse> {
+  return request<AutoConformPreviewResponse>("sync.auto_conform_preview", {
+    project_id: projectId,
+    context_radius: payload.context_radius ?? 2,
+    min_anchor_count: payload.min_anchor_count ?? 3,
+    tolerance_ms: payload.tolerance_ms ?? 500,
+    min_inlier_ratio: payload.min_inlier_ratio ?? 0.6,
+  });
+}
+
+export async function applyAutoConform(
+  projectId: string,
+  payload: {
+    offset_ms: number;
+    representative_video_subtitle_id: string;
+    representative_audio_subtitle_id: string;
+  },
+): Promise<AutoConformApplyApiResponse> {
+  return request<AutoConformApplyApiResponse>("sync.apply_auto_conform", {
+    project_id: projectId,
+    offset_ms: payload.offset_ms,
+    representative_video_subtitle_id: payload.representative_video_subtitle_id,
+    representative_audio_subtitle_id: payload.representative_audio_subtitle_id,
   });
 }
 

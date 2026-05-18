@@ -9,6 +9,8 @@ from daysync_core.errors import DaySyncError
 from daysync_core.utils import new_uuid, utc_now_iso
 
 AUTO_PASS_MIN_CANDIDATE_MARGIN = 0.1
+AUTO_CONFORM_MAX_SEEDS_PER_MEDIA = 2
+AUTO_CONFORM_MIN_TEXT_LENGTH = 4
 
 
 def create_manual_anchor_sync(
@@ -72,6 +74,221 @@ def create_manual_anchor_sync(
         "sync_result": representative_sync,
         "generated_count": len(sync_results),
         "track_offset_ms": track_offset_ms,
+    }
+
+
+def preview_auto_conform(
+    connection: sqlite3.Connection,
+    project_id: str,
+    context_radius: int = 2,
+    min_anchor_count: int = 3,
+    tolerance_ms: int = 500,
+    min_inlier_ratio: float = 0.6,
+) -> dict[str, object]:
+    video_rows = _load_project_subtitles_by_track_type(connection, project_id, "video_ref")
+    audio_rows = _load_project_subtitles_by_track_type(connection, project_id, "external_audio")
+    if not video_rows or not audio_rows:
+        return _empty_auto_conform_preview(
+            reason="missing_subtitle_tracks",
+            selected_seed_count=0,
+            eligible_seed_count=0,
+        )
+
+    selected_seeds, excluded_seeds = _select_auto_conform_seeds(video_rows)
+    anchor_pairs: list[dict[str, object]] = []
+    seen_audio_hits: set[tuple[str | None, int | None]] = set()
+
+    for seed in selected_seeds:
+        recommendation = _recommend_auto_candidates_internal(
+            connection,
+            project_id,
+            str(seed["id"]),
+            context_radius=context_radius,
+        )
+        chosen_candidate: dict[str, object] | None = None
+        chosen_reason = "no_viable_audio_candidate"
+        for candidate in recommendation["candidates"]:
+            candidate_reason = _auto_conform_candidate_rejection_reason(candidate)
+            if candidate_reason is not None:
+                chosen_reason = candidate_reason
+                continue
+            audio_hit_key = (
+                str(candidate.get("source_media_file_id")) if candidate.get("source_media_file_id") else None,
+                int(candidate["source_start_ms"]) if candidate.get("source_start_ms") is not None else None,
+            )
+            if audio_hit_key in seen_audio_hits:
+                chosen_reason = "duplicate_audio_anchor"
+                continue
+            chosen_candidate = candidate
+            seen_audio_hits.add(audio_hit_key)
+            break
+
+        if chosen_candidate is None:
+            excluded_seeds.append(
+                {
+                    "subtitle_id": str(seed["id"]),
+                    "raw_text": str(seed["raw_text"]),
+                    "source_filename": seed["source_filename"],
+                    "reason": chosen_reason,
+                }
+            )
+            continue
+
+        anchor_pairs.append(
+            {
+                "video_subtitle_id": str(seed["id"]),
+                "video_text": str(seed["raw_text"]),
+                "video_source_media_file_id": seed["source_media_file_id"],
+                "video_source_filename": seed["source_filename"],
+                "video_source_start_ms": seed["source_start_ms"],
+                "video_flat_start_ms": seed["flat_start_ms"],
+                "audio_subtitle_id": str(chosen_candidate["subtitle_id"]),
+                "audio_text": str(chosen_candidate["raw_text"]),
+                "audio_source_media_file_id": chosen_candidate["source_media_file_id"],
+                "audio_source_filename": chosen_candidate["source_filename"],
+                "audio_source_start_ms": chosen_candidate["source_start_ms"],
+                "audio_flat_start_ms": chosen_candidate["flat_start_ms"],
+                "offset_ms": int(chosen_candidate["flat_start_ms"]) - int(seed["flat_start_ms"]),
+                "source_offset_ms": int(chosen_candidate["source_start_ms"]) - int(seed["source_start_ms"]),
+                "text_similarity": float(chosen_candidate["text_similarity"]),
+                "context_similarity": float(chosen_candidate["context_similarity"]),
+                "final_score": float(chosen_candidate["final_score"]),
+                "candidate_margin": float(chosen_candidate["candidate_margin"]),
+                "reverse_margin": float(chosen_candidate["reverse_margin"]),
+                "reverse_match_consistent": bool(chosen_candidate["reverse_match_consistent"]),
+                "negative_evidence_count": int(chosen_candidate["negative_evidence_count"]),
+                "mapping_warning": chosen_candidate["mapping_warning"],
+            }
+        )
+
+    cluster_analysis = _analyze_auto_conform_pairs(
+        anchor_pairs,
+        tolerance_ms=tolerance_ms,
+        min_inlier_ratio=min_inlier_ratio,
+        min_anchor_count=min_anchor_count,
+    )
+    representative_pair = cluster_analysis["representative_pair"]
+    preview_offset_ms = cluster_analysis["cluster_summary"]["final_offset_ms"]
+    if preview_offset_ms is None and cluster_analysis["cluster_summary"]["candidate_count"] > 0:
+        preview_offset_ms = cluster_analysis["cluster_summary"]["median_offset_ms"]
+
+    preview_segments: list[dict[str, object]] = []
+    if representative_pair is not None and preview_offset_ms is not None:
+        preview_segments = _build_auto_conform_preview_segments(
+            connection,
+            project_id,
+            representative_video_subtitle_id=str(representative_pair["video_subtitle_id"]),
+            representative_audio_subtitle_id=str(representative_pair["audio_subtitle_id"]),
+            track_offset_ms=int(preview_offset_ms),
+            confidence_score=max(float(cluster_analysis["auto_accept_decision"]["average_candidate_margin"]), 0.5),
+        )
+
+    return {
+        "representative_pair": representative_pair,
+        "anchor_pairs": cluster_analysis["anchor_pairs"],
+        "excluded_seeds": excluded_seeds,
+        "cluster_summary": cluster_analysis["cluster_summary"],
+        "auto_accept_decision": cluster_analysis["auto_accept_decision"],
+        "preview_segments": preview_segments,
+        "ready_to_apply": bool(representative_pair is not None and preview_segments),
+        "selected_seed_count": len(selected_seeds),
+        "eligible_seed_count": len(anchor_pairs),
+    }
+
+
+def apply_auto_conform(
+    connection: sqlite3.Connection,
+    project_id: str,
+    offset_ms: int,
+    representative_video_subtitle_id: str,
+    representative_audio_subtitle_id: str,
+) -> dict[str, object]:
+    preview = preview_auto_conform(connection, project_id)
+    representative_pair = preview["representative_pair"]
+    if representative_pair is None:
+        raise DaySyncError("ANCHOR_SUBTITLE_INVALID", "当前没有可应用的自动整日合板提案")
+
+    preview_offset = preview["cluster_summary"]["final_offset_ms"]
+    if preview_offset is None:
+        preview_offset = preview["cluster_summary"]["median_offset_ms"]
+
+    if (
+        str(representative_pair["video_subtitle_id"]) != representative_video_subtitle_id
+        or str(representative_pair["audio_subtitle_id"]) != representative_audio_subtitle_id
+    ):
+        raise DaySyncError("ANCHOR_SUBTITLE_INVALID", "自动整日合板提案已变化，请重新预览后再应用")
+    if preview_offset is None:
+        raise DaySyncError("ANCHOR_SUBTITLE_INVALID", "自动整日合板提案未产出可用 offset")
+
+    video_anchor = _load_project_subtitle(connection, project_id, representative_video_subtitle_id)
+    audio_anchor = _load_project_subtitle(connection, project_id, representative_audio_subtitle_id)
+    video_items = _load_flat_timeline_items(connection, video_anchor["flat_timeline_id"])
+    audio_items = _load_flat_timeline_items(connection, audio_anchor["flat_timeline_id"])
+    auto_accept_eligible = bool(preview["auto_accept_decision"]["eligible"]) and int(preview_offset) == int(offset_ms)
+    status = "accepted_auto" if auto_accept_eligible else "accepted_manual"
+    confidence_breakdown = {
+        "auto_conform": True,
+        "track_sync": True,
+        "track_offset_ms": offset_ms,
+        "preview_cluster_summary": preview["cluster_summary"],
+        "preview_auto_accept_decision": preview["auto_accept_decision"],
+        "confirmed_by_user": not auto_accept_eligible,
+    }
+    created_at = utc_now_iso()
+    sync_results = _build_track_sync_results(
+        project_id=project_id,
+        video_anchor=video_anchor,
+        audio_anchor=audio_anchor,
+        video_items=video_items,
+        audio_items=audio_items,
+        track_offset_ms=offset_ms,
+        created_at=created_at,
+        status=status,
+        source="auto_text",
+        confidence_score=1.0 if auto_accept_eligible else 0.85,
+        confidence_breakdown=confidence_breakdown,
+    )
+    if not sync_results:
+        raise DaySyncError("ANCHOR_SUBTITLE_INVALID", "当前 offset 无法生成整日自动合板片段")
+
+    _clear_existing_auto_sync_results(connection, project_id)
+    for sync_result in sync_results:
+        connection.execute(
+            """
+            INSERT INTO sync_results (
+              id, project_id, session_id, video_media_file_id, audio_media_file_id, video_in_ms, video_out_ms,
+              audio_in_ms, audio_out_ms, offset_ms, drift_ppm, confidence_score, status, source,
+              video_anchor_subtitle_id, audio_anchor_subtitle_id, confidence_breakdown_json, created_at, updated_at
+            )
+            VALUES (:id, :project_id, :session_id, :video_media_file_id, :audio_media_file_id, :video_in_ms,
+                    :video_out_ms, :audio_in_ms, :audio_out_ms, :offset_ms, :drift_ppm, :confidence_score,
+                    :status, :source, :video_anchor_subtitle_id, :audio_anchor_subtitle_id,
+                    :confidence_breakdown_json, :created_at, :updated_at)
+            """,
+            sync_result,
+        )
+    connection.commit()
+
+    representative_sync = next(
+        (
+            item
+            for item in sync_results
+            if item["video_media_file_id"] == video_anchor["source_media_file_id"]
+            and item["audio_media_file_id"] == audio_anchor["source_media_file_id"]
+        ),
+        sync_results[0],
+    )
+    return {
+        "sync_result": representative_sync,
+        "generated_count": len(sync_results),
+        "track_offset_ms": offset_ms,
+        "sync_result_summary": {
+            "status": status,
+            "source": "auto_text",
+            "accepted_count": len(sync_results),
+            "representative_video_file": representative_sync["video_file"],
+            "representative_audio_file": representative_sync["audio_file"],
+        },
     }
 
 
@@ -755,6 +972,265 @@ def _load_flat_timeline_items(connection: sqlite3.Connection, flat_timeline_id: 
     return list(rows)
 
 
+def _empty_auto_conform_preview(
+    *,
+    reason: str,
+    selected_seed_count: int,
+    eligible_seed_count: int,
+) -> dict[str, object]:
+    return {
+        "representative_pair": None,
+        "anchor_pairs": [],
+        "excluded_seeds": [],
+        "cluster_summary": {
+            "candidate_count": 0,
+            "median_offset_ms": None,
+            "final_offset_ms": None,
+            "inlier_count": 0,
+            "inlier_ratio": 0.0,
+            "passes": False,
+            "tolerance_ms": 500,
+            "min_inlier_ratio": 0.6,
+            "min_anchor_count": 3,
+            "reverse_consistent_count": 0,
+            "negative_evidence_pair_count": 0,
+            "reasons": [reason],
+        },
+        "auto_accept_decision": {
+            "eligible": False,
+            "reasons": [reason],
+            "average_candidate_margin": 0.0,
+            "min_candidate_margin": AUTO_PASS_MIN_CANDIDATE_MARGIN,
+        },
+        "preview_segments": [],
+        "ready_to_apply": False,
+        "selected_seed_count": selected_seed_count,
+        "eligible_seed_count": eligible_seed_count,
+    }
+
+
+def _select_auto_conform_seeds(rows: list[sqlite3.Row]) -> tuple[list[sqlite3.Row], list[dict[str, object]]]:
+    duplicate_counts = _count_normalized_duplicates(rows)
+    grouped_candidates: dict[str, list[sqlite3.Row]] = {}
+    excluded_seeds: list[dict[str, object]] = []
+
+    for row in rows:
+        rejection_reason = _auto_conform_seed_rejection_reason(row, duplicate_counts)
+        if rejection_reason is not None:
+            excluded_seeds.append(
+                {
+                    "subtitle_id": str(row["id"]),
+                    "raw_text": str(row["raw_text"]),
+                    "source_filename": row["source_filename"],
+                    "reason": rejection_reason,
+                }
+            )
+            continue
+        media_key = str(row["source_media_file_id"])
+        grouped_candidates.setdefault(media_key, []).append(row)
+
+    selected: list[sqlite3.Row] = []
+    for media_key, candidates in grouped_candidates.items():
+        ordered = sorted(
+            candidates,
+            key=lambda item: (
+                -len(str(item["normalized_text"] or "")),
+                int(item["subtitle_index"]),
+            ),
+        )
+        selected.extend(ordered[:AUTO_CONFORM_MAX_SEEDS_PER_MEDIA])
+        for row in ordered[AUTO_CONFORM_MAX_SEEDS_PER_MEDIA:]:
+            excluded_seeds.append(
+                {
+                    "subtitle_id": str(row["id"]),
+                    "raw_text": str(row["raw_text"]),
+                    "source_filename": row["source_filename"],
+                    "reason": "exceeds_per_media_seed_limit",
+                }
+            )
+
+    selected.sort(
+        key=lambda item: (
+            -len(str(item["normalized_text"] or "")),
+            str(item["source_media_file_id"] or ""),
+            int(item["subtitle_index"]),
+        )
+    )
+    return selected, excluded_seeds
+
+
+def _auto_conform_seed_rejection_reason(
+    row: sqlite3.Row,
+    duplicate_counts: dict[str, int],
+) -> str | None:
+    normalized_text = str(row["normalized_text"] or "").strip()
+    if row["mapping_status"] != "ok":
+        return "mapping_not_ok"
+    if row["source_media_file_id"] is None or row["source_start_ms"] is None:
+        return "subtitle_not_mapped_to_source"
+    if not normalized_text:
+        return "normalized_text_empty"
+    if len(normalized_text) < AUTO_CONFORM_MIN_TEXT_LENGTH:
+        return "text_too_short"
+    if duplicate_counts.get(normalized_text, 0) > 1:
+        return "duplicate_normalized_text"
+    return None
+
+
+def _auto_conform_candidate_rejection_reason(candidate: dict[str, object]) -> str | None:
+    normalized_text = str(candidate.get("normalized_text") or "").strip()
+    if candidate.get("mapping_status") != "ok":
+        return "candidate_mapping_not_ok"
+    if candidate.get("source_media_file_id") is None or candidate.get("source_start_ms") is None:
+        return "candidate_not_mapped_to_source"
+    if not normalized_text:
+        return "candidate_normalized_text_empty"
+    if len(normalized_text) < AUTO_CONFORM_MIN_TEXT_LENGTH:
+        return "candidate_text_too_short"
+    if int(candidate.get("duplicate_count") or 0) > 1:
+        return "candidate_duplicate_normalized_text"
+    return None
+
+
+def _analyze_auto_conform_pairs(
+    anchor_pairs: list[dict[str, object]],
+    *,
+    tolerance_ms: int,
+    min_inlier_ratio: float,
+    min_anchor_count: int,
+) -> dict[str, object]:
+    if not anchor_pairs:
+        return {
+            "representative_pair": None,
+            "anchor_pairs": [],
+            "cluster_summary": {
+                "candidate_count": 0,
+                "median_offset_ms": None,
+                "final_offset_ms": None,
+                "inlier_count": 0,
+                "inlier_ratio": 0.0,
+                "passes": False,
+                "tolerance_ms": tolerance_ms,
+                "min_inlier_ratio": min_inlier_ratio,
+                "min_anchor_count": min_anchor_count,
+                "reverse_consistent_count": 0,
+                "negative_evidence_pair_count": 0,
+                "reasons": ["no_anchor_pairs"],
+            },
+            "auto_accept_decision": {
+                "eligible": False,
+                "reasons": ["no_anchor_pairs"],
+                "average_candidate_margin": 0.0,
+                "min_candidate_margin": AUTO_PASS_MIN_CANDIDATE_MARGIN,
+            },
+        }
+
+    analyzed_pairs = [dict(pair) for pair in anchor_pairs]
+    median_offset_ms = int(round(median([int(pair["offset_ms"]) for pair in analyzed_pairs])))
+    inlier_offsets: list[int] = []
+    for pair in analyzed_pairs:
+        cluster_deviation_ms = abs(int(pair["offset_ms"]) - median_offset_ms)
+        is_inlier = cluster_deviation_ms <= tolerance_ms
+        pair["cluster_deviation_ms"] = cluster_deviation_ms
+        pair["is_inlier"] = is_inlier
+        if is_inlier:
+            inlier_offsets.append(int(pair["offset_ms"]))
+
+    candidate_count = len(analyzed_pairs)
+    inlier_count = len(inlier_offsets)
+    inlier_ratio = inlier_count / candidate_count if candidate_count else 0.0
+    passes = candidate_count >= min_anchor_count and inlier_ratio >= min_inlier_ratio and inlier_count > 0
+    final_offset_ms = int(round(median(inlier_offsets))) if passes else None
+
+    reasons: list[str] = []
+    if candidate_count < min_anchor_count:
+        reasons.append("not_enough_anchor_pairs")
+    if inlier_ratio < min_inlier_ratio:
+        reasons.append("inlier_ratio_below_threshold")
+    if any(not bool(pair["reverse_match_consistent"]) for pair in analyzed_pairs):
+        reasons.append("reverse_match_inconsistency_present")
+    if any(int(pair["negative_evidence_count"]) > 0 for pair in analyzed_pairs):
+        reasons.append("negative_evidence_present")
+
+    relevant_pairs = [pair for pair in analyzed_pairs if pair["is_inlier"]]
+    if not relevant_pairs:
+        relevant_pairs = analyzed_pairs
+    auto_accept_decision = _evaluate_auto_accept(
+        cluster_summary={
+            "passes": passes,
+            "inlier_count": inlier_count,
+            "min_anchor_count": min_anchor_count,
+        },
+        relevant_pairs=relevant_pairs,
+        average_candidate_margin=_average_metric(relevant_pairs, "candidate_margin"),
+    )
+    representative_pair = min(
+        relevant_pairs,
+        key=lambda pair: (
+            int(pair["cluster_deviation_ms"]),
+            0 if bool(pair["reverse_match_consistent"]) else 1,
+            -float(pair["final_score"]),
+        ),
+    )
+
+    return {
+        "representative_pair": representative_pair,
+        "anchor_pairs": analyzed_pairs,
+        "cluster_summary": {
+            "candidate_count": candidate_count,
+            "median_offset_ms": median_offset_ms,
+            "final_offset_ms": final_offset_ms,
+            "inlier_count": inlier_count,
+            "inlier_ratio": round(inlier_ratio, 4),
+            "passes": passes,
+            "tolerance_ms": tolerance_ms,
+            "min_inlier_ratio": min_inlier_ratio,
+            "min_anchor_count": min_anchor_count,
+            "reverse_consistent_count": sum(
+                1 for pair in analyzed_pairs if bool(pair["reverse_match_consistent"])
+            ),
+            "negative_evidence_pair_count": sum(
+                1 for pair in analyzed_pairs if int(pair["negative_evidence_count"]) > 0
+            ),
+            "reasons": reasons,
+        },
+        "auto_accept_decision": auto_accept_decision,
+    }
+
+
+def _build_auto_conform_preview_segments(
+    connection: sqlite3.Connection,
+    project_id: str,
+    *,
+    representative_video_subtitle_id: str,
+    representative_audio_subtitle_id: str,
+    track_offset_ms: int,
+    confidence_score: float,
+) -> list[dict[str, object]]:
+    video_anchor = _load_project_subtitle(connection, project_id, representative_video_subtitle_id)
+    audio_anchor = _load_project_subtitle(connection, project_id, representative_audio_subtitle_id)
+    video_items = _load_flat_timeline_items(connection, video_anchor["flat_timeline_id"])
+    audio_items = _load_flat_timeline_items(connection, audio_anchor["flat_timeline_id"])
+    created_at = utc_now_iso()
+    return _build_track_sync_results(
+        project_id=project_id,
+        video_anchor=video_anchor,
+        audio_anchor=audio_anchor,
+        video_items=video_items,
+        audio_items=audio_items,
+        track_offset_ms=track_offset_ms,
+        created_at=created_at,
+        status="accepted_auto",
+        source="auto_text",
+        confidence_score=confidence_score,
+        confidence_breakdown={
+            "auto_conform_preview": True,
+            "track_sync": True,
+            "track_offset_ms": track_offset_ms,
+        },
+    )
+
+
 def _count_normalized_duplicates(rows: list[sqlite3.Row]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in rows:
@@ -902,8 +1378,16 @@ def _build_track_sync_results(
     audio_items: list[sqlite3.Row],
     track_offset_ms: int,
     created_at: str,
+    status: str = "accepted_manual",
+    source: str = "manual_anchor",
+    confidence_score: float = 1.0,
+    confidence_breakdown: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     sync_results: list[dict[str, object]] = []
+    confidence_breakdown_json = json.dumps(
+        confidence_breakdown or {"manual_anchor": True, "track_sync": True, "track_offset_ms": track_offset_ms},
+        ensure_ascii=False,
+    )
     for video_item in video_items:
         for audio_item in audio_items:
             common_start_ms = max(
@@ -941,21 +1425,18 @@ def _build_track_sync_results(
                     "audio_out_ms": audio_out_ms,
                     "offset_ms": audio_in_ms - video_in_ms,
                     "drift_ppm": None,
-                    "confidence_score": 1.0,
-                    "status": "accepted_manual",
-                    "source": "manual_anchor",
+                    "confidence_score": round(confidence_score, 4),
+                    "status": status,
+                    "source": source,
                     "video_anchor_subtitle_id": video_anchor["id"],
                     "audio_anchor_subtitle_id": audio_anchor["id"],
-                    "confidence_breakdown_json": json.dumps(
-                        {
-                            "manual_anchor": True,
-                            "track_sync": True,
-                            "track_offset_ms": track_offset_ms,
-                        },
-                        ensure_ascii=False,
-                    ),
+                    "confidence_breakdown_json": confidence_breakdown_json,
                     "created_at": created_at,
                     "updated_at": created_at,
+                    "video_file": video_item["filename"],
+                    "audio_file": audio_item["filename"],
+                    "timeline_start_ms": common_start_ms,
+                    "timeline_end_ms": common_end_ms,
                 }
             )
     return sync_results
@@ -982,6 +1463,17 @@ def _clear_existing_manual_sync_results(
             audio_placeholders=",".join("?" for _ in audio_media_ids),
         ),
         (project_id, *video_media_ids, *audio_media_ids),
+    )
+
+
+def _clear_existing_auto_sync_results(connection: sqlite3.Connection, project_id: str) -> None:
+    connection.execute(
+        """
+        DELETE FROM sync_results
+        WHERE project_id = ?
+          AND source = 'auto_text'
+        """,
+        (project_id,),
     )
 
 

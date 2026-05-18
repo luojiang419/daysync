@@ -186,11 +186,21 @@ def export_sync_report_fcpxml(connection: sqlite3.Connection, project_id: str, o
         """,
         (export_job_id, project_id, str(target), created_at),
     )
-    segments = _load_continuous_export_segments(connection, project_id)
-
     try:
+        segments = _require_xml_export_segments(connection, project_id, "DaVinci XML")
         fcpxml_content = _build_fcpxml(connection, project_id, segments)
         target.write_text(fcpxml_content, encoding="utf-8")
+    except DaySyncError as exc:
+        connection.execute(
+            """
+            UPDATE export_jobs
+            SET status = 'failed', error_message = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (str(exc), utc_now_iso(), export_job_id),
+        )
+        connection.commit()
+        raise
     except OSError as exc:
         connection.execute(
             """
@@ -229,11 +239,21 @@ def export_sync_report_fcp7_xml(
         """,
         (export_job_id, project_id, str(target), created_at),
     )
-    segments = _load_continuous_export_segments(connection, project_id)
-
     try:
+        segments = _require_xml_export_segments(connection, project_id, "Premiere XML")
         xml_content = _build_fcp7_xml(connection, project_id, segments)
         target.write_text(xml_content, encoding="utf-8")
+    except DaySyncError as exc:
+        connection.execute(
+            """
+            UPDATE export_jobs
+            SET status = 'failed', error_message = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (str(exc), utc_now_iso(), export_job_id),
+        )
+        connection.commit()
+        raise
     except OSError as exc:
         connection.execute(
             """
@@ -276,6 +296,17 @@ def _load_sync_export_rows(connection: sqlite3.Connection, project_id: str) -> l
         """,
         (project_id,),
     ).fetchall()
+
+
+def _require_xml_export_segments(
+    connection: sqlite3.Connection,
+    project_id: str,
+    export_label: str,
+) -> list[dict[str, object]]:
+    segments = _load_continuous_export_segments(connection, project_id)
+    if segments:
+        return segments
+    raise DaySyncError("EXPORT_FAILED", f"需先确认自动合板结果后再导出 {export_label}。")
 
 
 def _load_rich_sync_export_rows(connection: sqlite3.Connection, project_id: str) -> list[sqlite3.Row]:
