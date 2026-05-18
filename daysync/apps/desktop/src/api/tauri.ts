@@ -13,11 +13,64 @@ export function isTauriRuntime(): boolean {
   return Boolean(window.__TAURI_INTERNALS__);
 }
 
-export async function ensureDevApi(): Promise<boolean> {
-  if (!isTauriRuntime()) {
-    return false;
+export type RuntimeErrorPayload = {
+  code: string;
+  message: string;
+  details: Record<string, unknown>;
+};
+
+type RuntimeCommandResponse<T> = {
+  ok: boolean;
+  result?: T;
+  error?: RuntimeErrorPayload;
+};
+
+export class RuntimeInvocationError extends Error {
+  code: string;
+  details: Record<string, unknown>;
+
+  constructor(code: string, message: string, details: Record<string, unknown> = {}) {
+    super(message);
+    this.code = code;
+    this.details = details;
   }
-  return invoke<boolean>("ensure_dev_api");
+}
+
+function unwrapRuntimeResponse<T>(response: RuntimeCommandResponse<T>): T {
+  if (response.ok && response.result !== undefined) {
+    return response.result;
+  }
+  const error = response.error;
+  throw new RuntimeInvocationError(
+    error?.code ?? "RUNTIME_UNAVAILABLE",
+    error?.message ?? "未能连接本地运行时，请稍后重试。",
+    error?.details ?? {},
+  );
+}
+
+export async function ensureRuntimeReady<T>(): Promise<T> {
+  if (!isTauriRuntime()) {
+    throw new RuntimeInvocationError(
+      "RUNTIME_UNAVAILABLE",
+      "当前环境不是 DaySync 桌面版，本地运行时不可用。",
+    );
+  }
+  const response = await invoke<RuntimeCommandResponse<T>>("ensure_runtime_ready");
+  return unwrapRuntimeResponse(response);
+}
+
+export async function invokeRuntime<T>(
+  method: string,
+  payload: Record<string, unknown> = {},
+): Promise<T> {
+  if (!isTauriRuntime()) {
+    throw new RuntimeInvocationError(
+      "RUNTIME_UNAVAILABLE",
+      "当前环境不是 DaySync 桌面版，本地运行时不可用。",
+    );
+  }
+  const response = await invoke<RuntimeCommandResponse<T>>("invoke_runtime", { method, payload });
+  return unwrapRuntimeResponse(response);
 }
 
 export async function chooseDirectory(): Promise<string | null> {

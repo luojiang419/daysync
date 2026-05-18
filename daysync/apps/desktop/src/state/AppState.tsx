@@ -43,7 +43,7 @@ export type AppState = {
 
 export const initialState: AppState = {
   healthState: "idle",
-  healthMessage: "等待连接本地 API",
+  healthMessage: "等待连接本地运行时",
   currentProject: null,
   projectSettings: null,
   stats: null,

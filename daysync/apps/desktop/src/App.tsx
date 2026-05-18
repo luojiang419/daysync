@@ -34,11 +34,11 @@ function App() {
     async function bootstrap() {
       dispatch({
         type: "SET_HEALTH",
-        payload: { state: "checking", message: "正在连接本地 API..." },
+        payload: { state: "checking", message: "正在连接本地运行时..." },
       });
 
       try {
-          const health = await ensureLocalApiReady({ attempts: 20, delayMs: 500 });
+          const health = await ensureLocalApiReady();
           if (cancelled) {
             return;
           }
@@ -69,7 +69,7 @@ function App() {
             type: "SET_HEALTH",
             payload: {
               state: health.ffmpeg.ready ? "ready" : "error",
-              message: `API 已连接，本会话登记 ${health.registered_projects} 个项目，${ffmpegMessage}`,
+              message: `本地运行时已就绪，本会话登记 ${health.registered_projects} 个项目，${ffmpegMessage}`,
             },
           });
           return;
@@ -82,7 +82,7 @@ function App() {
           type: "SET_HEALTH",
           payload: {
             state: "error",
-            message: "未连接到本地 API，请检查 DaySync 本地运行时是否完整，或在开发环境手动启动 uvicorn。",
+            message: "未能连接本地运行时，请检查 DaySync 桌面运行时是否完整。",
           },
         });
       }

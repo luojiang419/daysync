@@ -19,7 +19,7 @@ daysync/
 ├── packages/daysync_core   # Python 核心业务与测试
 ├── sample_data/            # MVP 测试样例
 ├── scripts/                # 开发辅助脚本
-└── services/api            # FastAPI 本地服务
+└── tools/                  # FFmpeg 等本地运行时资源
 ```
 
 ## 开发环境
@@ -36,7 +36,6 @@ daysync/
 uv sync
 pnpm install
 uv run pytest
-uv run uvicorn services.api.main:app --reload --host 127.0.0.1 --port 17831
 pnpm --filter desktop dev
 pnpm --filter desktop test
 pnpm --filter desktop tauri dev
@@ -60,7 +59,7 @@ pwsh -File scripts/build_windows_release.ps1
 
 ## Windows 便携发布
 
-执行下面命令会生成一个带本地 API 运行时的 Windows 便携目录：
+执行下面命令会生成一个带本地 Python bridge 运行时的 Windows 便携目录：
 
 ```powershell
 pwsh -File scripts/build_windows_release.ps1
@@ -78,4 +77,4 @@ output/DaySync_Windows_Portable/
 - `daysync_runtime/`
 - `release-manifest.json`
 
-其中 `daysync_runtime/` 会带上本地 `.venv`、`services/`、`packages/daysync_core/src/` 与项目内 FFmpeg 运行时，桌面端启动时会优先使用这个本地运行时，而不是依赖开发机的绝对路径或全局 `uv`。
+其中 `daysync_runtime/` 会带上本地 `.venv`、`packages/daysync_core/src/` 与项目内 FFmpeg 运行时，桌面端启动时会直接启动本地 Python worker，而不是依赖 `uvicorn` 或本地 HTTP 端口。

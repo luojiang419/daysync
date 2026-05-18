@@ -4,9 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
-
-from services.api.main import app
+from daysync_core.bridge import RuntimeDispatcher, RuntimeState, dispatch_message
 
 
 def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
@@ -34,31 +32,28 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr("daysync_core.media.service.probe_media", fake_probe)
     monkeypatch.setattr(
-        "services.api.main.ensure_ffmpeg_runtime",
+        "daysync_core.bridge.dispatcher.ensure_ffmpeg_runtime",
         lambda: SimpleNamespace(to_dict=lambda: fake_ffmpeg_status),
     )
-    monkeypatch.setattr(
-        "services.api.routes.media.ensure_ffmpeg_runtime",
-        lambda: SimpleNamespace(to_dict=lambda: fake_ffmpeg_status),
-    )
-
-    client = TestClient(app)
+    dispatcher = RuntimeDispatcher(RuntimeState())
     project_root = tmp_path / "project"
-    create_response = client.post(
-        "/api/projects",
-        json={
+    create_response = runtime_call(
+        dispatcher,
+        "project.create",
+        {
             "name": "纪录片样片 2026-01-01",
             "root_path": str(project_root),
             "shooting_date": "2026-01-01",
         },
     )
-    assert create_response.status_code == 200
-    project_id = create_response.json()["project"]["id"]
-    assert create_response.json()["project_settings"]["subtitle_workspace"]["query"] == ""
+    project_id = create_response["project"]["id"]
+    assert create_response["project_settings"]["subtitle_workspace"]["query"] == ""
 
-    media_import = client.post(
-        f"/api/projects/{project_id}/media/import",
-        json={
+    media_import = runtime_call(
+        dispatcher,
+        "media.import",
+        {
+            "project_id": project_id,
             "paths": [
                 str(sample_root / "media" / "A001_C001.mov"),
                 str(sample_root / "media" / "A001_C002.mov"),
@@ -67,68 +62,89 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
             "session_id": None,
         },
     )
-    assert media_import.status_code == 200
-    imported = media_import.json()["imported"]
+    imported = media_import["imported"]
     video_ids = [item["id"] for item in imported if item["media_type"] == "video"]
     audio_ids = [item["id"] for item in imported if item["media_type"] == "audio"]
 
-    video_timeline = client.post(
-        f"/api/projects/{project_id}/flat-timelines",
-        json={"media_type": "video", "media_file_ids": video_ids, "sort_mode": "filename", "gap_ms": 1000},
+    video_timeline = runtime_call(
+        dispatcher,
+        "timeline.create",
+        {
+            "project_id": project_id,
+            "media_type": "video",
+            "media_file_ids": video_ids,
+            "sort_mode": "filename",
+            "gap_ms": 1000,
+        },
     )
-    audio_timeline = client.post(
-        f"/api/projects/{project_id}/flat-timelines",
-        json={"media_type": "audio", "media_file_ids": audio_ids, "sort_mode": "filename", "gap_ms": 1000},
+    audio_timeline = runtime_call(
+        dispatcher,
+        "timeline.create",
+        {
+            "project_id": project_id,
+            "media_type": "audio",
+            "media_file_ids": audio_ids,
+            "sort_mode": "filename",
+            "gap_ms": 1000,
+        },
     )
-    assert video_timeline.status_code == 200
-    assert audio_timeline.status_code == 200
 
-    video_subtitles = client.post(
-        f"/api/projects/{project_id}/subtitles/import",
-        json={
-            "flat_timeline_id": video_timeline.json()["flat_timeline_id"],
+    video_subtitles = runtime_call(
+        dispatcher,
+        "subtitle.import",
+        {
+            "project_id": project_id,
+            "flat_timeline_id": video_timeline["flat_timeline_id"],
             "track_type": "video_ref",
             "source_type": "srt_import",
             "path": str(sample_root / "subtitles" / "video_flat.srt"),
             "language": "zh-CN",
         },
     )
-    audio_subtitles = client.post(
-        f"/api/projects/{project_id}/subtitles/import",
-        json={
-            "flat_timeline_id": audio_timeline.json()["flat_timeline_id"],
+    audio_subtitles = runtime_call(
+        dispatcher,
+        "subtitle.import",
+        {
+            "project_id": project_id,
+            "flat_timeline_id": audio_timeline["flat_timeline_id"],
             "track_type": "external_audio",
             "source_type": "srt_import",
             "path": str(sample_root / "subtitles" / "audio_flat.srt"),
             "language": "zh-CN",
         },
     )
-    assert video_subtitles.json()["imported_count"] == 2
-    assert audio_subtitles.json()["imported_count"] == 2
+    assert video_subtitles["imported_count"] == 2
+    assert audio_subtitles["imported_count"] == 2
 
-    search_response = client.get(
-        f"/api/projects/{project_id}/subtitles/search",
-        params={"q": "我们到了这里", "limit": 20},
+    search_data = runtime_call(
+        dispatcher,
+        "subtitle.search",
+        {
+            "project_id": project_id,
+            "query": "我们到了这里",
+            "limit": 20,
+        },
     )
-    assert search_response.status_code == 200
-    search_data = search_response.json()
     assert len(search_data["video_results"]) == 1
     assert len(search_data["audio_results"]) == 1
 
-    auto_candidates_response = client.post(
-        f"/api/projects/{project_id}/sync/auto-candidates",
-        json={
+    auto_candidates_response = runtime_call(
+        dispatcher,
+        "sync.auto_candidates",
+        {
+            "project_id": project_id,
             "anchor_subtitle_id": search_data["video_results"][0]["subtitle_id"],
             "limit": 3,
             "context_radius": 1,
         },
     )
-    assert auto_candidates_response.status_code == 200
-    assert auto_candidates_response.json()["candidates"][0]["subtitle_id"] == search_data["audio_results"][0]["subtitle_id"]
+    assert auto_candidates_response["candidates"][0]["subtitle_id"] == search_data["audio_results"][0]["subtitle_id"]
 
-    offset_cluster_response = client.post(
-        f"/api/projects/{project_id}/sync/offset-cluster",
-        json={
+    offset_cluster_response = runtime_call(
+        dispatcher,
+        "sync.offset_cluster",
+        {
+            "project_id": project_id,
             "pairs": [
                 {
                     "video_subtitle_id": search_data["video_results"][0]["subtitle_id"],
@@ -141,12 +157,13 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
             "context_radius": 1,
         },
     )
-    assert offset_cluster_response.status_code == 200
-    assert offset_cluster_response.json()["cluster_summary"]["candidate_count"] == 1
+    assert offset_cluster_response["cluster_summary"]["candidate_count"] == 1
 
-    cluster_candidate_response = client.post(
-        f"/api/projects/{project_id}/sync/cluster-candidate",
-        json={
+    cluster_candidate_response = runtime_call(
+        dispatcher,
+        "sync.cluster_candidate",
+        {
+            "project_id": project_id,
             "pairs": [
                 {
                     "video_subtitle_id": search_data["video_results"][0]["subtitle_id"],
@@ -160,68 +177,72 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
             "note": None,
         },
     )
-    assert cluster_candidate_response.status_code == 200
-    candidate_sync_result_id = cluster_candidate_response.json()["sync_result"]["id"]
+    candidate_sync_result_id = cluster_candidate_response["sync_result"]["id"]
 
-    review_queue_response = client.get(f"/api/projects/{project_id}/sync/review-queue")
-    assert review_queue_response.status_code == 200
-    assert review_queue_response.json()["items"][0]["id"] == candidate_sync_result_id
+    review_queue_response = runtime_call(dispatcher, "sync.review_queue", {"project_id": project_id})
+    assert review_queue_response["items"][0]["id"] == candidate_sync_result_id
 
-    review_response = client.post(
-        f"/api/projects/{project_id}/sync/results/{candidate_sync_result_id}/review",
-        json={"action": "accepted", "new_offset_ms": None, "note": None},
+    review_response = runtime_call(
+        dispatcher,
+        "sync.review_result",
+        {
+            "project_id": project_id,
+            "sync_result_id": candidate_sync_result_id,
+            "action": "accepted",
+            "new_offset_ms": None,
+            "note": None,
+        },
     )
-    assert review_response.status_code == 200
-    assert review_response.json()["sync_result"]["status"] == "accepted_auto"
+    assert review_response["sync_result"]["status"] == "accepted_auto"
 
-    sync_response = client.post(
-        f"/api/projects/{project_id}/sync/manual-anchor",
-        json={
+    sync_response = runtime_call(
+        dispatcher,
+        "sync.manual_anchor",
+        {
+            "project_id": project_id,
             "video_subtitle_id": search_data["video_results"][0]["subtitle_id"],
             "audio_subtitle_id": search_data["audio_results"][0]["subtitle_id"],
         },
     )
-    assert sync_response.status_code == 200
-    assert sync_response.json()["sync_result"]["offset_ms"] == 574180
+    assert sync_response["sync_result"]["offset_ms"] == 574180
 
-    export_response = client.post(
-        f"/api/projects/{project_id}/exports/csv",
-        json={"output_path": str(tmp_path / "exports" / "sync_report.csv")},
+    export_response = runtime_call(
+        dispatcher,
+        "export.csv",
+        {"project_id": project_id, "output_path": str(tmp_path / "exports" / "sync_report.csv")},
     )
-    assert export_response.status_code == 200
-    assert export_response.json()["row_count"] == 3
+    assert export_response["row_count"] == 3
 
-    export_xml_response = client.post(
-        f"/api/projects/{project_id}/exports/fcp7-xml",
-        json={"output_path": str(tmp_path / "exports" / "sync_report_fcp7.xml")},
+    export_xml_response = runtime_call(
+        dispatcher,
+        "export.fcp7_xml",
+        {"project_id": project_id, "output_path": str(tmp_path / "exports" / "sync_report_fcp7.xml")},
     )
-    assert export_xml_response.status_code == 200
-    assert export_xml_response.json()["sequence_count"] == 1
+    assert export_xml_response["sequence_count"] == 1
 
-    export_json_response = client.post(
-        f"/api/projects/{project_id}/exports/json",
-        json={"output_path": str(tmp_path / "exports" / "sync_report.json")},
+    export_json_response = runtime_call(
+        dispatcher,
+        "export.json",
+        {"project_id": project_id, "output_path": str(tmp_path / "exports" / "sync_report.json")},
     )
-    assert export_json_response.status_code == 200
-    assert export_json_response.json()["item_count"] == 3
+    assert export_json_response["item_count"] == 3
 
-    export_otio_response = client.post(
-        f"/api/projects/{project_id}/exports/otio",
-        json={"output_path": str(tmp_path / "exports" / "sync_report.otio")},
+    export_otio_response = runtime_call(
+        dispatcher,
+        "export.otio",
+        {"project_id": project_id, "output_path": str(tmp_path / "exports" / "sync_report.otio")},
     )
-    assert export_otio_response.status_code == 200
-    assert export_otio_response.json()["item_count"] == 2
+    assert export_otio_response["item_count"] == 2
 
-    export_fcpxml_response = client.post(
-        f"/api/projects/{project_id}/exports/fcpxml",
-        json={"output_path": str(tmp_path / "exports" / "sync_report.fcpxml")},
+    export_fcpxml_response = runtime_call(
+        dispatcher,
+        "export.fcpxml",
+        {"project_id": project_id, "output_path": str(tmp_path / "exports" / "sync_report.fcpxml")},
     )
-    assert export_fcpxml_response.status_code == 200
-    assert export_fcpxml_response.json()["project_count"] == 1
+    assert export_fcpxml_response["project_count"] == 1
 
-    export_jobs_response = client.get(f"/api/projects/{project_id}/exports/jobs")
-    assert export_jobs_response.status_code == 200
-    export_jobs = export_jobs_response.json()["items"]
+    export_jobs_response = runtime_call(dispatcher, "export.list_jobs", {"project_id": project_id})
+    export_jobs = export_jobs_response["items"]
     assert len(export_jobs) == 5
     assert export_jobs[0]["export_type"] == "fcpxml"
     assert export_jobs[0]["status"] == "succeeded"
@@ -230,9 +251,11 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
     assert export_jobs[3]["export_type"] == "fcp7_xml"
     assert export_jobs[4]["export_type"] == "csv"
 
-    settings_response = client.put(
-        f"/api/projects/{project_id}/settings",
-        json={
+    settings_response = runtime_call(
+        dispatcher,
+        "project.save_settings",
+        {
+            "project_id": project_id,
             "subtitle_workspace": {
                 "query": "继续往前走",
                 "video_srt_path": str(sample_root / "subtitles" / "video_flat.srt"),
@@ -244,9 +267,28 @@ def test_mvp_flow(monkeypatch, tmp_path: Path) -> None:
             },
         },
     )
-    assert settings_response.status_code == 200
 
-    reopen_response = client.get("/api/projects/open", params={"root_path": str(project_root)})
-    assert reopen_response.status_code == 200
-    assert reopen_response.json()["project_settings"]["subtitle_workspace"]["query"] == "继续往前走"
-    assert reopen_response.json()["project_settings"]["export_workspace"]["status_filter"] == "accepted_auto"
+    reopen_response = runtime_call(
+        dispatcher,
+        "project.open",
+        {"root_path": str(project_root)},
+    )
+    assert reopen_response["project_settings"]["subtitle_workspace"]["query"] == "继续往前走"
+    assert reopen_response["project_settings"]["export_workspace"]["status_filter"] == "accepted_auto"
+
+
+def runtime_call(
+    dispatcher: RuntimeDispatcher,
+    method: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    response = dispatch_message(
+        dispatcher,
+        {
+            "id": method,
+            "method": method,
+            "payload": payload,
+        },
+    )
+    assert response["ok"] is True, response
+    return response["result"]

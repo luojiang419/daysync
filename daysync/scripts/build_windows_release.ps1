@@ -48,7 +48,6 @@ New-Item -ItemType Directory -Path $resolvedOutput | Out-Null
 New-Item -ItemType Directory -Path $releaseRuntime | Out-Null
 
 Copy-Item -LiteralPath $desktopExe -Destination $releaseExe
-Copy-Item -LiteralPath (Join-Path $resolvedWorkspace "services") -Destination (Join-Path $releaseRuntime "services") -Recurse
 Copy-Item -LiteralPath (Join-Path $resolvedWorkspace "packages") -Destination (Join-Path $releaseRuntime "packages") -Recurse
 Copy-Item -LiteralPath (Join-Path $resolvedWorkspace ".venv") -Destination (Join-Path $releaseRuntime ".venv") -Recurse
 Copy-Item -LiteralPath (Join-Path $resolvedWorkspace "pyproject.toml") -Destination (Join-Path $releaseRuntime "pyproject.toml")
@@ -73,7 +72,7 @@ $manifestPath = Join-Path $resolvedOutput "release-manifest.json"
 $releaseManifest | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
 $env:PYTHONPATH = "$releaseRuntime;$($releaseRuntime)\packages\daysync_core\src"
-& $releasePython -c "from services.api.main import app; print(app.title)"
+& $releasePython -c "from daysync_core.bridge.dispatcher import RuntimeDispatcher; print(RuntimeDispatcher.__name__)"
 if ($LASTEXITCODE -ne 0) {
     throw "Release runtime smoke import failed."
 }

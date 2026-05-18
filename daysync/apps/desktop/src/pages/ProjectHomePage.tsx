@@ -18,17 +18,17 @@ export function ProjectHomePage() {
 
   async function ensureApiConnection(): Promise<boolean> {
     try {
-      const health = await ensureLocalApiReady({ attempts: 20, delayMs: 500 });
+      const health = await ensureLocalApiReady();
       dispatch({
         type: "SET_HEALTH",
         payload: {
           state: health.ffmpeg.ready ? "ready" : "error",
-          message: `API 已连接，本会话登记 ${health.registered_projects} 个项目，FFmpeg ${health.ffmpeg.version ?? "unknown"} · ${health.ffmpeg.source ?? "unknown"}`,
+          message: `本地运行时已就绪，本会话登记 ${health.registered_projects} 个项目，FFmpeg ${health.ffmpeg.version ?? "unknown"} · ${health.ffmpeg.source ?? "unknown"}`,
         },
       });
       return true;
     } catch (error) {
-      const message = error instanceof ApiError ? error.message : "未连接到本地 API。";
+      const message = error instanceof ApiError ? error.message : "未能连接本地运行时。";
       dispatch({ type: "SET_NOTICE", payload: { tone: "error", message } });
       return false;
     }

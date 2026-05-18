@@ -1,6 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
 
-import { getApiBaseUrl } from "../api/client";
 import { useAppState } from "../state/AppState";
 
 const NAV_ITEMS = [
@@ -38,9 +37,9 @@ export function AppShell() {
         </nav>
 
         <div className={`status-card is-${healthState}`}>
-          <div className="status-label">API 状态</div>
+          <div className="status-label">运行时状态</div>
           <strong>{healthMessage}</strong>
-          <span className="status-meta">{getApiBaseUrl()}</span>
+          <span className="status-meta">本地 Python bridge</span>
         </div>
 
         {currentProject ? (

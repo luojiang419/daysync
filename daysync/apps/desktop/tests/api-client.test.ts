@@ -1,205 +1,154 @@
-import { ApiError, checkHealth, ensureLocalApiReady, waitForApiReady } from "../src/api/client";
+import { ApiError, checkHealth, createProject, ensureLocalApiReady, waitForApiReady } from "../src/api/client";
 
 vi.mock("../src/api/tauri", () => ({
-  ensureDevApi: vi.fn().mockResolvedValue(true),
-  isTauriRuntime: vi.fn().mockReturnValue(true),
+  RuntimeInvocationError: class RuntimeInvocationError extends Error {
+    code: string;
+    details: Record<string, unknown>;
+
+    constructor(code: string, message: string, details: Record<string, unknown> = {}) {
+      super(message);
+      this.code = code;
+      this.details = details;
+    }
+  },
+  ensureRuntimeReady: vi.fn(),
+  invokeRuntime: vi.fn(),
 }));
 
 describe("api client", () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
-  it("返回健康检查数据", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        text: async () =>
-          JSON.stringify({
-            status: "ok",
-            registered_projects: 2,
-            ffmpeg: {
-              ready: true,
-              source: "project-local",
-              version: "8.1.1",
-              root_path: "D:\\ffmpeg",
-              ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
-              ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
-              error: null,
-            },
-          }),
-      }),
-    );
+  it("返回本地运行时健康检查数据", async () => {
+    const tauriApi = await import("../src/api/tauri");
+    vi.mocked(tauriApi.ensureRuntimeReady).mockResolvedValueOnce({
+      status: "ok",
+      registered_projects: 2,
+      ffmpeg: {
+        ready: true,
+        source: "project-local",
+        version: "8.1.1",
+        root_path: "D:\\ffmpeg",
+        ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
+        ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
+        error: null,
+      },
+    });
 
     const result = await checkHealth();
+
     expect(result.status).toBe("ok");
     expect(result.registered_projects).toBe(2);
     expect(result.ffmpeg.source).toBe("project-local");
   });
 
-  it("把后端错误解包成 ApiError", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 400,
-        text: async () =>
-          JSON.stringify({
-            error: {
-              code: "PROJECT_PATH_INVALID",
-              message: "路径不可写",
-              details: { root_path: "D:\\test" },
-            },
-          }),
-      }),
+  it("把运行时错误包装成 ApiError", async () => {
+    const tauriApi = await import("../src/api/tauri");
+    const runtimeError = new tauriApi.RuntimeInvocationError(
+      "RUNTIME_UNAVAILABLE",
+      "未能连接本地运行时，请稍后重试。",
+      {
+        cause: "spawn failed",
+      },
+    );
+    vi.mocked(tauriApi.ensureRuntimeReady).mockRejectedValueOnce(
+      runtimeError,
     );
 
     await expect(checkHealth()).rejects.toMatchObject({
-      code: "PROJECT_PATH_INVALID",
-      message: "路径不可写",
+      code: "RUNTIME_UNAVAILABLE",
+      message: "未能连接本地运行时，请稍后重试。",
     } satisfies Partial<ApiError>);
   });
 
-  it("把网络失败包装成明确的 ApiError", async () => {
+  it("waitForApiReady 会复用本地运行时健康检查", async () => {
     const tauriApi = await import("../src/api/tauri");
-    vi.mocked(tauriApi.ensureDevApi).mockRejectedValueOnce(new Error("spawn failed"));
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    vi.mocked(tauriApi.ensureRuntimeReady).mockResolvedValueOnce({
+      status: "ok",
+      registered_projects: 1,
+      ffmpeg: {
+        ready: true,
+        source: "project-local",
+        version: "8.1.1",
+        root_path: "D:\\ffmpeg",
+        ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
+        ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
+        error: null,
+      },
+    });
 
-    await expect(checkHealth()).rejects.toMatchObject({
-      code: "API_UNREACHABLE",
-      message: "未连接到本地 API，请稍后重试；如果是桌面版，请等待本地运行时完成启动。",
-    } satisfies Partial<ApiError>);
+    const result = await waitForApiReady();
+
+    expect(result.registered_projects).toBe(1);
   });
 
-  it("waitForApiReady 会重试直到健康检查成功", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockRejectedValueOnce(new TypeError("fetch failed"))
-        .mockResolvedValueOnce({
-          ok: true,
-          text: async () =>
-            JSON.stringify({
-              status: "ok",
-              registered_projects: 0,
-              ffmpeg: {
-                ready: true,
-                source: "project-local",
-                version: "8.1.1",
-                root_path: "D:\\ffmpeg",
-                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
-                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
-                error: null,
-              },
-            }),
-        }),
-    );
-
-    const result = await waitForApiReady({ attempts: 2, delayMs: 0 });
-
-    expect(result.status).toBe("ok");
-  });
-
-  it("桌面版请求失败时会自动拉起本地 API 后重试", async () => {
+  it("ensureLocalApiReady 会直接调用本地运行时就绪检查", async () => {
     const tauriApi = await import("../src/api/tauri");
-    vi.mocked(tauriApi.ensureDevApi).mockResolvedValueOnce(true);
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockRejectedValueOnce(new TypeError("fetch failed"))
-        .mockResolvedValueOnce({
-          ok: true,
-          text: async () =>
-            JSON.stringify({
-              status: "ok",
-              registered_projects: 1,
-              ffmpeg: {
-                ready: true,
-                source: "project-local",
-                version: "8.1.1",
-                root_path: "D:\\ffmpeg",
-                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
-                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
-                error: null,
-              },
-            }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          text: async () =>
-            JSON.stringify({
-              status: "ok",
-              registered_projects: 1,
-              ffmpeg: {
-                ready: true,
-                source: "project-local",
-                version: "8.1.1",
-                root_path: "D:\\ffmpeg",
-                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
-                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
-                error: null,
-              },
-            }),
-        }),
-    );
+    vi.mocked(tauriApi.ensureRuntimeReady).mockResolvedValueOnce({
+      status: "ok",
+      registered_projects: 3,
+      ffmpeg: {
+        ready: true,
+        source: "project-local",
+        version: "8.1.1",
+        root_path: "D:\\ffmpeg",
+        ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
+        ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
+        error: null,
+      },
+    });
 
-    const result = await checkHealth();
-
-    expect(result.status).toBe("ok");
-    expect(tauriApi.ensureDevApi).toHaveBeenCalled();
-  });
-
-  it("ensureLocalApiReady 会在桌面版自动等待 API 就绪", async () => {
-    const tauriApi = await import("../src/api/tauri");
-    vi.mocked(tauriApi.ensureDevApi).mockResolvedValueOnce(true);
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockRejectedValueOnce(new TypeError("fetch failed"))
-        .mockResolvedValueOnce({
-          ok: true,
-          text: async () =>
-            JSON.stringify({
-              status: "ok",
-              registered_projects: 3,
-              ffmpeg: {
-                ready: true,
-                source: "project-local",
-                version: "8.1.1",
-                root_path: "D:\\ffmpeg",
-                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
-                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
-                error: null,
-              },
-            }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          text: async () =>
-            JSON.stringify({
-              status: "ok",
-              registered_projects: 3,
-              ffmpeg: {
-                ready: true,
-                source: "project-local",
-                version: "8.1.1",
-                root_path: "D:\\ffmpeg",
-                ffmpeg_path: "D:\\ffmpeg\\ffmpeg.exe",
-                ffprobe_path: "D:\\ffmpeg\\ffprobe.exe",
-                error: null,
-              },
-            }),
-        }),
-    );
-
-    const result = await ensureLocalApiReady({ attempts: 2, delayMs: 0 });
+    const result = await ensureLocalApiReady();
 
     expect(result.registered_projects).toBe(3);
-    expect(tauriApi.ensureDevApi).toHaveBeenCalled();
+    expect(tauriApi.ensureRuntimeReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("项目创建请求会直接转发到本地运行时方法", async () => {
+    const tauriApi = await import("../src/api/tauri");
+    vi.mocked(tauriApi.invokeRuntime).mockResolvedValueOnce({
+      project: {
+        id: "project-1",
+        name: "测试项目",
+        root_path: "D:\\projects\\demo",
+      },
+      stats: {
+        media_count: 0,
+        subtitle_count: 0,
+        sync_result_count: 0,
+      },
+      media_files: [],
+      flat_timelines: [],
+      sync_results: [],
+      project_settings: {
+        subtitle_workspace: {
+          video_timeline_id: "",
+          audio_timeline_id: "",
+          video_srt_path: "",
+          audio_srt_path: "",
+          query: "",
+          cluster_samples: [],
+        },
+        export_workspace: {
+          output_path: "",
+          status_filter: "all",
+          source_filter: "all",
+          min_confidence_filter: "0",
+        },
+      },
+    });
+
+    await createProject({
+      name: "测试项目",
+      root_path: "D:\\projects\\demo",
+      shooting_date: "2026-05-17",
+    });
+
+    expect(tauriApi.invokeRuntime).toHaveBeenCalledWith("project.create", {
+      name: "测试项目",
+      root_path: "D:\\projects\\demo",
+      shooting_date: "2026-05-17",
+    });
   });
 });

@@ -11,10 +11,7 @@ import type {
   StudioTimelineSnapshot,
   SyncResult,
 } from "./types";
-import { ensureDevApi, isTauriRuntime } from "./tauri";
-
-const API_BASE_URL =
-  import.meta.env.VITE_DAYSYNC_API_URL ?? "http://127.0.0.1:17831";
+import { ensureRuntimeReady, RuntimeInvocationError, invokeRuntime } from "./tauri";
 
 export class ApiError extends Error {
   code: string;
@@ -124,141 +121,44 @@ type ExportJobListResponse = {
   items: ExportJob[];
 };
 
-type RequestOptions = {
-  allowRecovery?: boolean;
-};
+type RequestOptions = Record<string, never>;
 
-const API_RECOVERY_ATTEMPTS = 20;
-const API_RECOVERY_DELAY_MS = 500;
-
-let apiRecoveryPromise: Promise<boolean> | null = null;
-
-async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
-  let response: Response;
+async function request<T>(method: string, payload: Record<string, unknown> = {}): Promise<T> {
   try {
-    response = await performFetch(path, init);
+    return await invokeRuntime<T>(method, payload);
   } catch (error) {
-    const recovered =
-      options.allowRecovery !== false && (await startOrRefreshLocalApi());
-    if (!recovered) {
-      throw buildApiUnreachableError(error);
-    }
-
-    try {
-      response = await performFetch(path, init);
-    } catch (retryError) {
-      throw buildApiUnreachableError(retryError);
-    }
-  }
-
-  const payloadText = await response.text();
-  const payload = payloadText ? (JSON.parse(payloadText) as Record<string, unknown>) : {};
-  if (!response.ok) {
-    const error = payload.error as
-      | { code?: string; message?: string; details?: Record<string, unknown> }
-      | undefined;
-    throw new ApiError(
-      error?.code ?? "UNKNOWN_ERROR",
-      error?.message ?? `Request failed: ${response.status}`,
-      error?.details ?? {},
-    );
-  }
-  return payload as T;
-}
-
-export function getApiBaseUrl(): string {
-  return API_BASE_URL;
-}
-
-export async function checkHealth(options: RequestOptions = {}): Promise<HealthResponse> {
-  return request<HealthResponse>("/api/health", undefined, options);
-}
-
-export async function waitForApiReady(
-  options: { attempts?: number; delayMs?: number; allowRecovery?: boolean } = {},
-): Promise<HealthResponse> {
-  const attempts = options.attempts ?? 8;
-  const delayMs = options.delayMs ?? 500;
-  const allowRecovery = options.allowRecovery ?? false;
-  let lastError: unknown = null;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      return await checkHealth({ allowRecovery });
-    } catch (error) {
-      lastError = error;
-      if (attempt < attempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-  }
-
-  if (lastError instanceof ApiError) {
-    throw lastError;
-  }
-  throw new ApiError("API_UNREACHABLE", "未连接到本地 API。");
-}
-
-export async function ensureLocalApiReady(
-  options: { attempts?: number; delayMs?: number } = {},
-): Promise<HealthResponse> {
-  try {
-    return await checkHealth({ allowRecovery: false });
-  } catch {
-    const recovered = await startOrRefreshLocalApi(
-      options.attempts ?? API_RECOVERY_ATTEMPTS,
-      options.delayMs ?? API_RECOVERY_DELAY_MS,
-    );
-    if (!recovered) {
-      throw new ApiError(
-        "API_UNREACHABLE",
-        "未连接到本地 API，请稍后重试；如果是桌面版，请等待本地运行时完成启动。",
-      );
-    }
-    return checkHealth({ allowRecovery: false });
+    throw toApiError(error);
   }
 }
 
-async function performFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
-}
-
-function buildApiUnreachableError(error: unknown): ApiError {
+function toApiError(error: unknown): ApiError {
+  if (error instanceof ApiError) {
+    return error;
+  }
+  if (error instanceof RuntimeInvocationError) {
+    return new ApiError(error.code, error.message, error.details);
+  }
   return new ApiError(
-    "API_UNREACHABLE",
-    "未连接到本地 API，请稍后重试；如果是桌面版，请等待本地运行时完成启动。",
+    "RUNTIME_UNAVAILABLE",
+    "未能连接本地运行时，请稍后重试。",
     { cause: error instanceof Error ? error.message : String(error) },
   );
 }
 
-async function startOrRefreshLocalApi(
-  attempts = API_RECOVERY_ATTEMPTS,
-  delayMs = API_RECOVERY_DELAY_MS,
-): Promise<boolean> {
-  if (!isTauriRuntime()) {
-    return false;
+export async function checkHealth(_options: RequestOptions = {}): Promise<HealthResponse> {
+  try {
+    return await ensureRuntimeReady<HealthResponse>();
+  } catch (error) {
+    throw toApiError(error);
   }
-  if (apiRecoveryPromise) {
-    return apiRecoveryPromise;
-  }
-  apiRecoveryPromise = (async () => {
-    try {
-      await ensureDevApi();
-      await waitForApiReady({ attempts, delayMs, allowRecovery: false });
-      return true;
-    } catch {
-      return false;
-    } finally {
-      apiRecoveryPromise = null;
-    }
-  })();
-  return apiRecoveryPromise;
+}
+
+export async function waitForApiReady(): Promise<HealthResponse> {
+  return checkHealth();
+}
+
+export async function ensureLocalApiReady(): Promise<HealthResponse> {
+  return checkHealth();
 }
 
 export async function createProject(payload: {
@@ -266,15 +166,11 @@ export async function createProject(payload: {
   root_path: string;
   shooting_date?: string;
 }): Promise<ProjectSnapshot> {
-  return request<ProjectSnapshot>("/api/projects", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return request<ProjectSnapshot>("project.create", payload);
 }
 
 export async function openProject(rootPath: string): Promise<ProjectSnapshot> {
-  const query = new URLSearchParams({ root_path: rootPath });
-  return request<ProjectSnapshot>(`/api/projects/open?${query.toString()}`);
+  return request<ProjectSnapshot>("project.open", { root_path: rootPath });
 }
 
 export async function saveProjectSettings(
@@ -284,9 +180,9 @@ export async function saveProjectSettings(
     export_workspace?: Record<string, unknown>;
   },
 ): Promise<{ project_settings: Record<string, unknown> }> {
-  return request<{ project_settings: Record<string, unknown> }>(`/api/projects/${projectId}/settings`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
+  return request<{ project_settings: Record<string, unknown> }>("project.save_settings", {
+    project_id: projectId,
+    ...payload,
   });
 }
 
@@ -294,10 +190,7 @@ export async function importMedia(
   projectId: string,
   payload: { paths: string[]; session_id: string | null },
 ): Promise<ImportMediaResponse> {
-  return request<ImportMediaResponse>(`/api/projects/${projectId}/media/import`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return request<ImportMediaResponse>("media.import", { project_id: projectId, ...payload });
 }
 
 export async function createFlatTimeline(
@@ -309,10 +202,7 @@ export async function createFlatTimeline(
     gap_ms: number;
   },
 ): Promise<FlatTimelineResponse> {
-  return request<FlatTimelineResponse>(`/api/projects/${projectId}/flat-timelines`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return request<FlatTimelineResponse>("timeline.create", { project_id: projectId, ...payload });
 }
 
 export async function importSubtitles(
@@ -325,10 +215,7 @@ export async function importSubtitles(
     language?: string;
   },
 ): Promise<ImportSubtitlesResponse> {
-  return request<ImportSubtitlesResponse>(`/api/projects/${projectId}/subtitles/import`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return request<ImportSubtitlesResponse>("subtitle.import", { project_id: projectId, ...payload });
 }
 
 export async function searchSubtitles(
@@ -336,31 +223,25 @@ export async function searchSubtitles(
   query: string,
   limit = 20,
 ): Promise<SearchResults> {
-  const search = new URLSearchParams({ q: query, limit: String(limit) });
-  return request<SearchResults>(`/api/projects/${projectId}/subtitles/search?${search.toString()}`);
+  return request<SearchResults>("subtitle.search", { project_id: projectId, query, limit });
 }
 
 export async function createManualSync(
   projectId: string,
   payload: { video_subtitle_id: string; audio_subtitle_id: string },
 ): Promise<SyncResponse> {
-  return request<SyncResponse>(`/api/projects/${projectId}/sync/manual-anchor`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return request<SyncResponse>("sync.manual_anchor", { project_id: projectId, ...payload });
 }
 
 export async function recommendAutoCandidates(
   projectId: string,
   payload: { anchor_subtitle_id: string; limit?: number; context_radius?: number },
 ): Promise<AutoCandidateApiResponse> {
-  return request<AutoCandidateApiResponse>(`/api/projects/${projectId}/sync/auto-candidates`, {
-    method: "POST",
-    body: JSON.stringify({
-      anchor_subtitle_id: payload.anchor_subtitle_id,
-      limit: payload.limit ?? 5,
-      context_radius: payload.context_radius ?? 1,
-    }),
+  return request<AutoCandidateApiResponse>("sync.auto_candidates", {
+    project_id: projectId,
+    anchor_subtitle_id: payload.anchor_subtitle_id,
+    limit: payload.limit ?? 5,
+    context_radius: payload.context_radius ?? 1,
   });
 }
 
@@ -374,15 +255,13 @@ export async function analyzeOffsetCluster(
     context_radius?: number;
   },
 ): Promise<OffsetClusterApiResponse> {
-  return request<OffsetClusterApiResponse>(`/api/projects/${projectId}/sync/offset-cluster`, {
-    method: "POST",
-    body: JSON.stringify({
-      pairs: payload.pairs,
-      tolerance_ms: payload.tolerance_ms ?? 500,
-      min_inlier_ratio: payload.min_inlier_ratio ?? 0.6,
-      min_anchor_count: payload.min_anchor_count ?? 3,
-      context_radius: payload.context_radius ?? 1,
-    }),
+  return request<OffsetClusterApiResponse>("sync.offset_cluster", {
+    project_id: projectId,
+    pairs: payload.pairs,
+    tolerance_ms: payload.tolerance_ms ?? 500,
+    min_inlier_ratio: payload.min_inlier_ratio ?? 0.6,
+    min_anchor_count: payload.min_anchor_count ?? 3,
+    context_radius: payload.context_radius ?? 1,
   });
 }
 
@@ -397,21 +276,19 @@ export async function createClusterCandidate(
     note?: string;
   },
 ): Promise<ClusterCandidateResponse> {
-  return request<ClusterCandidateResponse>(`/api/projects/${projectId}/sync/cluster-candidate`, {
-    method: "POST",
-    body: JSON.stringify({
-      pairs: payload.pairs,
-      tolerance_ms: payload.tolerance_ms ?? 500,
-      min_inlier_ratio: payload.min_inlier_ratio ?? 0.6,
-      min_anchor_count: payload.min_anchor_count ?? 3,
-      context_radius: payload.context_radius ?? 1,
-      note: payload.note ?? null,
-    }),
+  return request<ClusterCandidateResponse>("sync.cluster_candidate", {
+    project_id: projectId,
+    pairs: payload.pairs,
+    tolerance_ms: payload.tolerance_ms ?? 500,
+    min_inlier_ratio: payload.min_inlier_ratio ?? 0.6,
+    min_anchor_count: payload.min_anchor_count ?? 3,
+    context_radius: payload.context_radius ?? 1,
+    note: payload.note ?? null,
   });
 }
 
 export async function listReviewQueue(projectId: string): Promise<ReviewQueueResponse> {
-  return request<ReviewQueueResponse>(`/api/projects/${projectId}/sync/review-queue`);
+  return request<ReviewQueueResponse>("sync.review_queue", { project_id: projectId });
 }
 
 export async function reviewSyncResult(
@@ -419,74 +296,58 @@ export async function reviewSyncResult(
   syncResultId: string,
   payload: { action: "accepted" | "rejected" | "adjusted" | "commented"; new_offset_ms?: number; note?: string },
 ): Promise<ReviewSyncResultResponse> {
-  return request<ReviewSyncResultResponse>(`/api/projects/${projectId}/sync/results/${syncResultId}/review`, {
-    method: "POST",
-    body: JSON.stringify({
-      action: payload.action,
-      new_offset_ms: payload.new_offset_ms ?? null,
-      note: payload.note ?? null,
-    }),
+  return request<ReviewSyncResultResponse>("sync.review_result", {
+    project_id: projectId,
+    sync_result_id: syncResultId,
+    action: payload.action,
+    new_offset_ms: payload.new_offset_ms ?? null,
+    note: payload.note ?? null,
   });
 }
 
 export async function listSyncResults(projectId: string): Promise<SyncListResponse> {
-  return request<SyncListResponse>(`/api/projects/${projectId}/sync/results`);
+  return request<SyncListResponse>("sync.list_results", { project_id: projectId });
 }
 
 export async function exportCsv(
   projectId: string,
   outputPath: string,
 ): Promise<ExportCsvResponse> {
-  return request<ExportCsvResponse>(`/api/projects/${projectId}/exports/csv`, {
-    method: "POST",
-    body: JSON.stringify({ output_path: outputPath }),
-  });
+  return request<ExportCsvResponse>("export.csv", { project_id: projectId, output_path: outputPath });
 }
 
 export async function exportFcp7Xml(
   projectId: string,
   outputPath: string,
 ): Promise<ExportFcp7XmlResponse> {
-  return request<ExportFcp7XmlResponse>(`/api/projects/${projectId}/exports/fcp7-xml`, {
-    method: "POST",
-    body: JSON.stringify({ output_path: outputPath }),
-  });
+  return request<ExportFcp7XmlResponse>("export.fcp7_xml", { project_id: projectId, output_path: outputPath });
 }
 
 export async function exportJson(
   projectId: string,
   outputPath: string,
 ): Promise<ExportJsonResponse> {
-  return request<ExportJsonResponse>(`/api/projects/${projectId}/exports/json`, {
-    method: "POST",
-    body: JSON.stringify({ output_path: outputPath }),
-  });
+  return request<ExportJsonResponse>("export.json", { project_id: projectId, output_path: outputPath });
 }
 
 export async function exportOtio(
   projectId: string,
   outputPath: string,
 ): Promise<ExportJsonResponse> {
-  return request<ExportJsonResponse>(`/api/projects/${projectId}/exports/otio`, {
-    method: "POST",
-    body: JSON.stringify({ output_path: outputPath }),
-  });
+  return request<ExportJsonResponse>("export.otio", { project_id: projectId, output_path: outputPath });
 }
 
 export async function exportFcpxml(
   projectId: string,
   outputPath: string,
 ): Promise<ExportFcpxmlResponse> {
-  return request<ExportFcpxmlResponse>(`/api/projects/${projectId}/exports/fcpxml`, {
-    method: "POST",
-    body: JSON.stringify({ output_path: outputPath }),
-  });
+  return request<ExportFcpxmlResponse>("export.fcpxml", { project_id: projectId, output_path: outputPath });
 }
 
 export async function listExportJobs(projectId: string): Promise<ExportJobListResponse> {
-  return request<ExportJobListResponse>(`/api/projects/${projectId}/exports/jobs`);
+  return request<ExportJobListResponse>("export.list_jobs", { project_id: projectId });
 }
 
 export async function getStudioTimeline(projectId: string): Promise<StudioTimelineSnapshot> {
-  return request<StudioTimelineSnapshot>(`/api/projects/${projectId}/studio/timeline`);
+  return request<StudioTimelineSnapshot>("studio.timeline", { project_id: projectId });
 }
