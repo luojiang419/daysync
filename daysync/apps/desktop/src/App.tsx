@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createHashRouter, RouterProvider } from "react-router-dom";
 
-import { ensureLocalApiReady, openProject } from "./api/client";
+import { ApiError, ensureLocalApiReady, openProject } from "./api/client";
 import { AppShell } from "./components/AppShell";
 import { ExportPage } from "./pages/ExportPage";
 import { FlatTimelinePage } from "./pages/FlatTimelinePage";
@@ -24,6 +24,17 @@ const router = createHashRouter([
     ],
   },
 ]);
+
+function formatRuntimeFailureMessage(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return "未能连接本地运行时，请检查 DaySync 桌面运行时是否完整。";
+  }
+  const cause = error.details.cause;
+  if (typeof cause === "string" && cause.trim()) {
+    return `未能连接本地运行时：${cause}`;
+  }
+  return error.message || "未能连接本地运行时，请检查 DaySync 桌面运行时是否完整。";
+}
 
 function App() {
   const { dispatch } = useAppState();
@@ -73,18 +84,17 @@ function App() {
             },
           });
           return;
-      } catch {
-        // 交由统一错误提示兜底。
-      }
-
-      if (!cancelled) {
-        dispatch({
-          type: "SET_HEALTH",
-          payload: {
-            state: "error",
-            message: "未能连接本地运行时，请检查 DaySync 桌面运行时是否完整。",
-          },
-        });
+      } catch (error) {
+        if (!cancelled) {
+          dispatch({
+            type: "SET_HEALTH",
+            payload: {
+              state: "error",
+              message: formatRuntimeFailureMessage(error),
+            },
+          });
+        }
+        return;
       }
     }
 

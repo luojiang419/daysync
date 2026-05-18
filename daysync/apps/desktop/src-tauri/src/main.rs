@@ -79,6 +79,8 @@ impl RuntimeProcess {
             .args(&plan.args)
             .current_dir(&plan.workspace_root)
             .env(WORKSPACE_ENV_KEY, &plan.workspace_root)
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUTF8", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

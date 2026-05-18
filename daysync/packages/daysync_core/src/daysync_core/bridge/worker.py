@@ -7,6 +7,11 @@ from .dispatcher import RuntimeDispatcher, RuntimeState, dispatch_message
 
 
 def main() -> int:
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     dispatcher = RuntimeDispatcher(RuntimeState())
 
     for raw_line in sys.stdin:
